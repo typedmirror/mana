@@ -488,7 +488,7 @@ func TestSpecCompleteExampleRuns(t *testing.T) {
     total_users: @users -> count
     active_users: @active -> count
     active_rate: @active -> count / @users -> count
-    top_regions: @active |> group by region |> sort by count |> take 5
+    top_regions: @active |> group by region |> sort by count descending |> take 5
 }
 
 -- write locally first
