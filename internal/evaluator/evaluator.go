@@ -271,6 +271,8 @@ func (e *Evaluator) eval(node ast.Expression, sc *scope) object.Value {
 		return v
 	case *ast.ActRef:
 		return e.evalActRef(n)
+	case *ast.ModuleCall:
+		return e.evalModuleCall(n, sc, nil)
 	case *ast.ListLiteral:
 		return e.evalList(n, sc)
 	case *ast.RecordLiteral:
@@ -443,6 +445,8 @@ func (e *Evaluator) evalPipe(n *ast.Pipe, sc *scope) object.Value {
 		return e.evalTransform(stage, left, sc)
 	case *ast.Verb:
 		return e.evalVerb(stage, sc, left)
+	case *ast.ModuleCall:
+		return e.evalModuleCall(stage, sc, left)
 	}
 	return e.fail(n.Stage, "%s cannot be used as a pipe stage", n.Stage.String())
 }
@@ -485,13 +489,11 @@ func (e *Evaluator) evalMatch(n *ast.Match, subject object.Value, sc *scope) obj
 // capability — the `use` set is the permission boundary, so a `use` that
 // quietly did nothing would be a permission granted over nothing.
 func (e *Evaluator) evalUse(s *ast.Use) object.Value {
-	for _, name := range e.host.ToolNames() {
-		if name == s.Module {
-			e.uses[s.Module] = true
-			return object.Null{}
-		}
+	if _, ok := e.host.Module(s.Module); ok {
+		e.uses[s.Module] = true
+		return object.Null{}
 	}
-	available := e.host.ToolNames()
+	available := e.host.Modules()
 	if len(available) == 0 {
 		return e.adopt(s, &object.Err{
 			Reason:     fmt.Sprintf("no module named %q is available", s.Module),
@@ -502,6 +504,99 @@ func (e *Evaluator) evalUse(s *ast.Use) object.Value {
 		Reason:     fmt.Sprintf("no module named %q is available", s.Module),
 		Suggestion: "available: " + strings.Join(available, ", "),
 	})
+}
+
+// currentIntent is the reasoning in force, handed to modules automatically
+// (v2 §7.3) so a module can report a failure the way the language does.
+func (e *Evaluator) currentIntent() string {
+	if len(e.intents) == 0 {
+		return ""
+	}
+	return e.intents[len(e.intents)-1]
+}
+
+// module resolves a name against this act's use set. Being installed is not
+// enough: the `use` boundary is the permission boundary (v2 §7.2), so an act
+// that did not ask for a module cannot reach it.
+func (e *Evaluator) module(node ast.Node, name string) (host.Module, *object.Err) {
+	if !e.uses[name] {
+		if _, installed := e.host.Module(name); installed {
+			return nil, e.adopt(node, &object.Err{
+				Reason:     fmt.Sprintf("module %q is not used in this act", name),
+				Suggestion: fmt.Sprintf("add `use %s` to the act", name),
+			})
+		}
+		return nil, e.fail(node, "no module named %q is used in this act", name)
+	}
+	m, _ := e.host.Module(name)
+	return m, nil
+}
+
+// evalModuleCall runs a module verb (v2 §7.1).
+func (e *Evaluator) evalModuleCall(n *ast.ModuleCall, sc *scope, piped object.Value) object.Value {
+	m, err := e.module(n, n.Module)
+	if err != nil {
+		return err
+	}
+	call := host.Call{Target: n.Target, Clauses: map[string]object.Value{}}
+	if len(e.intents) > 0 {
+		call.Intent = e.intents[len(e.intents)-1]
+	}
+	if piped != nil {
+		call.Args = append(call.Args, piped)
+	}
+	for _, a := range n.Args {
+		v := e.eval(a, sc)
+		if object.IsErr(v) {
+			return v
+		}
+		call.Args = append(call.Args, v)
+	}
+	for _, c := range n.Clauses {
+		if bad := e.checkClause(n, m, c); bad != nil {
+			return bad
+		}
+		v := e.eval(c.Value, sc)
+		if object.IsErr(v) {
+			return v
+		}
+		call.Clauses[c.Name()] = v
+	}
+	out := m.Execute(call)
+	if out == nil {
+		return e.fail(n, "module %q returned nothing", n.Module)
+	}
+	if bad, isErr := out.(*object.Err); isErr {
+		return e.adopt(n, bad)
+	}
+	return out
+}
+
+// checkClause validates a clause keyword against the module's declared set.
+// Clauses() returning nil means the module accepts only the built-in keywords —
+// the optionality that lets a plain tool and a clause-declaring module share one
+// interface.
+func (e *Evaluator) checkClause(n ast.Node, m host.Module, c ast.Clause) *object.Err {
+	if !c.Custom() {
+		return nil // a built-in keyword; every module accepts these
+	}
+	for _, allowed := range m.Clauses() {
+		if allowed == c.Name() {
+			return nil
+		}
+	}
+	return e.adopt(n, &object.Err{
+		Reason:     fmt.Sprintf("module %q does not accept clause %q", m.Name(), c.Name()),
+		Suggestion: "valid clauses for " + m.Name() + ": [" + strings.Join(clauseVocabulary(m), ", ") + "]",
+	})
+}
+
+// clauseVocabulary is everything a module accepts: the built-in keywords plus
+// whatever it declares.
+func clauseVocabulary(m host.Module) []string {
+	out := []string{"where", "with", "from", "to", "as", "at", "by"}
+	out = append(out, m.Clauses()...)
+	return out
 }
 
 // evalActRef reads another act's result (v2 §4.3).

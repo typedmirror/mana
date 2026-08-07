@@ -345,13 +345,24 @@ func (e *If) String() string {
 
 // --- operations --------------------------------------------------------------
 
-// Clause is a keyword-value modifier on a verb or transform (spec §6).
-// Resolution is by keyword, never by position.
+// Clause is a keyword-value modifier on a verb, transform, or module call
+// (spec §6, v2 §8). Resolution is by keyword, never by position.
+//
+// Kw is the built-in clause type, or token.IDENT when the keyword came from a
+// module. Name is the word as written, which is the only thing that identifies
+// a module-defined clause.
 type Clause struct {
 	Tok   token.Token
 	Kw    token.Type
 	Value Expression
 }
+
+// Name is the clause keyword as written.
+func (c Clause) Name() string { return c.Tok.Literal }
+
+// Custom reports whether this clause came from a module rather than the
+// built-in set.
+func (c Clause) Custom() bool { return c.Kw == token.IDENT }
 
 func clauseList(cs []Clause) string {
 	var b strings.Builder
@@ -460,4 +471,43 @@ func (e *Match) String() string {
 	}
 	b.WriteString(" }")
 	return b.String()
+}
+
+// ModuleCall is a verb supplied by a module (v2 §7.1): `postgres query "…"`,
+// `inventory check item "widget-x"`.
+//
+// The parser never checks whether the module exists. `VERB := NAME` is
+// deliberately open so the grammar stays context-free — the evaluator resolves
+// the name against the enclosing act's `use` set, which is the layer that
+// knows. That also buys a better diagnostic than a syntax error.
+type ModuleCall struct {
+	Tok     token.Token
+	Module  string
+	Target  string // the bare word after the module name, "" if there is none
+	Args    []Expression
+	Clauses []Clause
+}
+
+func (e *ModuleCall) expressionNode() {}
+func (e *ModuleCall) Line() int       { return e.Tok.Line }
+func (e *ModuleCall) String() string {
+	var b strings.Builder
+	b.WriteString(e.Module)
+	if e.Target != "" {
+		b.WriteString(" " + e.Target)
+	}
+	for _, a := range e.Args {
+		b.WriteString(" " + a.String())
+	}
+	b.WriteString(clauseList(e.Clauses))
+	return b.String()
+}
+
+func (e *ModuleCall) Clause(kw token.Type) (Expression, bool) {
+	for _, c := range e.Clauses {
+		if c.Kw == kw {
+			return c.Value, true
+		}
+	}
+	return nil, false
 }

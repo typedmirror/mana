@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/typedmirror/mana/internal/ast"
+	"github.com/typedmirror/mana/internal/host"
 	"github.com/typedmirror/mana/internal/object"
 	"github.com/typedmirror/mana/internal/token"
 )
@@ -40,17 +41,22 @@ func (e *Evaluator) evalTransform(n *ast.Transform, input object.Value, sc *scop
 	case "trim", "lowercase":
 		return e.transformString(n, input)
 	}
-	// Spec §11: tools are ambient verbs with names, resolved by the runtime.
-	// A transform that is not built in gets one chance to be a tool before it
-	// is reported as unknown.
-	for _, name := range e.host.ToolNames() {
-		if name == n.Name {
-			out, err := e.host.CallTool(n.Name, input)
-			if err != nil {
-				return e.fail(n, "tool %s failed: %v", n.Name, err)
-			}
-			return out
+	// A transform that is not built in gets one chance to be a module verb
+	// before it is reported as unknown, so `@x -> search_web` works when the
+	// act has used it.
+	if e.uses[n.Name] {
+		m, err := e.module(n, n.Name)
+		if err != nil {
+			return err
 		}
+		out := m.Execute(host.Call{Args: []object.Value{input}, Intent: e.currentIntent()})
+		if out == nil {
+			return e.fail(n, "module %q returned nothing", n.Name)
+		}
+		if bad, isErr := out.(*object.Err); isErr {
+			return e.adopt(n, bad)
+		}
+		return out
 	}
 	return e.fail(n, "unknown transform %q — known transforms are %s", n.Name, strings.Join(knownTransforms, ", "))
 }

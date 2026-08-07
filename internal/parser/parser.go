@@ -177,6 +177,15 @@ func (p *Parser) parseStatement() ast.Statement {
 		}
 	}
 	tok := p.cur()
+	// A bare word starting a statement, followed by something, is a module
+	// verb. `postgres query "…"` cannot be anything else.
+	if tok.Type == token.IDENT && p.startsModuleCall() {
+		e := p.parseModuleCall()
+		if e == nil {
+			return nil
+		}
+		return &ast.ExpressionStatement{Tok: tok, Expression: e}
+	}
 	e := p.parseExpression(lowest)
 	if e == nil {
 		return nil
@@ -184,10 +193,19 @@ func (p *Parser) parseStatement() ast.Statement {
 	return &ast.ExpressionStatement{Tok: tok, Expression: e}
 }
 
+// startsModuleCall reports whether the current bare word is being used as a
+// verb rather than as a value: something that can start an argument follows it.
+//
+// Clause keywords are deliberately not in that set, which is what keeps
+// `fetch users from …` and `create user with …` from reading as module calls.
+func (p *Parser) startsModuleCall() bool {
+	return startsArgument(p.at(1).Type)
+}
+
 // --- expressions -------------------------------------------------------------
 
 func (p *Parser) parseExpression(prec int) ast.Expression {
-	left := p.parsePrefix()
+	left := p.parsePrefix(prec)
 	if left == nil {
 		return nil
 	}
@@ -200,10 +218,18 @@ func (p *Parser) parseExpression(prec int) ast.Expression {
 	return left
 }
 
-func (p *Parser) parsePrefix() ast.Expression {
+func (p *Parser) parsePrefix(prec int) ast.Expression {
 	tok := p.cur()
 	switch tok.Type {
 	case token.IDENT:
+		// A module call only where a whole expression is expected: a statement,
+		// a binding, a record field, a list element. Clause values and verb
+		// arguments parse tighter, and treating `sort by count descending` or
+		// `create user with …` as a call would take a word that belongs to the
+		// enclosing construct.
+		if prec == lowest && p.startsModuleCall() {
+			return p.parseModuleCall()
+		}
 		p.next()
 		return &ast.Identifier{Tok: tok, Value: tok.Literal}
 	case token.BINDING:
@@ -256,6 +282,56 @@ func (p *Parser) parsePrefix() ast.Expression {
 	p.next()
 	p.errorf(tok, "unexpected %s(%q)", tok.Type, tok.Literal)
 	return nil
+}
+
+// parseModuleCall reads `NAME [target] ARG* CLAUSE*` (v2 §7.1).
+//
+// The first bare word after the module name is the target — always, even when
+// an expression follows it. That is what separates `inventory check item "x"`
+// (target `check`, clause `item`) from a clause list, and it is why the rule is
+// positional rather than shape-based: `check` and `item` look identical.
+func (p *Parser) parseModuleCall() ast.Expression {
+	tok := p.next()
+	call := &ast.ModuleCall{Tok: tok, Module: tok.Literal}
+
+	if isWord(p.cur()) {
+		call.Target = p.next().Literal
+	}
+	for {
+		switch {
+		case token.IsClause(p.cur().Type):
+			c := p.parseOneClause()
+			if c == nil {
+				return nil
+			}
+			call.Clauses = append(call.Clauses, *c)
+		case p.startsCustomClauseAt(0):
+			kw := p.next()
+			v := p.parseExpression(pipe)
+			if v == nil {
+				return nil
+			}
+			call.Clauses = append(call.Clauses, ast.Clause{Tok: kw, Kw: token.IDENT, Value: v})
+		case startsArgument(p.cur().Type):
+			a := p.parseExpression(pipe)
+			if a == nil {
+				return nil
+			}
+			call.Args = append(call.Args, a)
+		default:
+			return call
+		}
+	}
+}
+
+// startsCustomClauseAt reports whether a module-defined clause begins n tokens
+// ahead: a bare word followed by something that can start an expression.
+func (p *Parser) startsCustomClauseAt(n int) bool {
+	tok := p.at(n)
+	if tok.Type != token.IDENT {
+		return false
+	}
+	return startsArgument(p.at(n + 1).Type)
 }
 
 func (p *Parser) parseInfix(left ast.Expression) ast.Expression {
@@ -384,6 +460,13 @@ func (p *Parser) parseStage() ast.Expression {
 	case token.IsVerb(p.cur().Type):
 		return p.parseVerb()
 	case p.curIs(token.IDENT):
+		if p.startsCustomClauseAt(0) || isWord(p.at(1)) {
+			// `… |> slack send channel "ops"` — two words in stage position is
+			// a module call, not a transform with an argument.
+			if _, builtin := builtinTransforms[p.cur().Literal]; !builtin {
+				return p.parseModuleCall()
+			}
+		}
 		return p.parseTransform()
 	}
 	// Nothing else can act on a piped value. Rejecting it here rather than at
@@ -436,6 +519,23 @@ func (p *Parser) parseVerb() ast.Expression {
 		v.Clauses = p.parseClauses()
 		return v
 	}
+	// `run tool <name>` and `send err <reason>` are language forms whose first
+	// argument is a bare word followed by a value — the same shape as a module
+	// call. Consumed here so generic parsing never sees them.
+	for _, form := range []struct {
+		verb token.Type
+		word string
+	}{{token.RUN, "tool"}, {token.SEND, "err"}} {
+		if tok.Type == form.verb && p.wordIs(0, form.word) {
+			marker := p.next()
+			v.Args = append(v.Args, &ast.Identifier{Tok: marker, Value: marker.Literal})
+			if form.word == "tool" && isWord(p.cur()) {
+				name := p.next()
+				v.Args = append(v.Args, &ast.Identifier{Tok: name, Value: name.Literal})
+			}
+			break
+		}
+	}
 	// Arguments stop at `|>`. Two alternatives were tried and measured, and
 	// both were worse:
 	//
@@ -465,28 +565,59 @@ func (p *Parser) parseVerb() ast.Expression {
 
 func (p *Parser) parseClauses() []ast.Clause {
 	var out []ast.Clause
-	for token.IsClause(p.cur().Type) {
-		tok := p.next()
-		v := p.parseClauseValue(tok.Type)
-		if v == nil {
+	sawTo := false
+	for {
+		switch {
+		case token.IsClause(p.cur().Type):
+			if p.curIs(token.TO) {
+				sawTo = true
+			}
+			c := p.parseOneClause()
+			if c == nil {
+				return out
+			}
+			out = append(out, *c)
+		case sawTo && p.startsCustomClauseAt(0):
+			// `send @x to slack channel "ops"` — once a destination names a
+			// module, what follows can be that module's own clause. Allowed
+			// only after `to`, because a bare word before any clause is an
+			// argument: `run tool search_web …` must keep both words.
+			kw := p.next()
+			v := p.parseExpression(pipe)
+			if v == nil {
+				return out
+			}
+			out = append(out, ast.Clause{Tok: kw, Kw: token.IDENT, Value: v})
+		default:
 			return out
 		}
-		out = append(out, ast.Clause{Tok: tok, Kw: tok.Type, Value: v})
 	}
-	return out
+}
+
+func (p *Parser) parseOneClause() *ast.Clause {
+	tok := p.next()
+	v := p.parseClauseValue(tok.Type)
+	if v == nil {
+		return nil
+	}
+	return &ast.Clause{Tok: tok, Kw: tok.Type, Value: v}
 }
 
 func (p *Parser) parseClauseValue(kw token.Type) ast.Expression {
 	// `with name "alice"` (spec §5.3) is a one-field record written without
 	// braces. It is only that when a bare name is followed by a value; `with
 	// @content` and `with { ... }` are ordinary expressions.
-	if kw == token.WITH && p.curIs(token.IDENT) && startsArgument(p.peek().Type) {
-		key := p.next()
-		v := p.parseExpression(pipe)
-		if v == nil {
-			return nil
+	if kw == token.WITH && p.startsCustomClauseAt(0) {
+		rec := &ast.RecordLiteral{Tok: p.cur()}
+		for p.startsCustomClauseAt(0) {
+			key := p.next()
+			v := p.parseExpression(pipe)
+			if v == nil {
+				return nil
+			}
+			rec.Pairs = append(rec.Pairs, ast.Pair{Key: key.Literal, Value: v})
 		}
-		return &ast.RecordLiteral{Tok: key, Pairs: []ast.Pair{{Key: key.Literal, Value: v}}}
+		return rec
 	}
 	return p.parseExpression(pipe)
 }
@@ -669,4 +800,12 @@ func (p *Parser) armStartsAt(n int) bool {
 		return false
 	}
 	return p.at(n+1).Type == token.IDENT && p.at(n+2).Type == token.COLON
+}
+
+// builtinTransforms are the names resolved as data operations rather than as
+// module verbs. The parser needs the set only to break the tie in stage
+// position, where `map name` and `postgres query` have the same shape.
+var builtinTransforms = map[string]struct{}{
+	"filter": {}, "map": {}, "sort": {}, "group": {}, "take": {},
+	"count": {}, "sum": {}, "trim": {}, "lowercase": {}, "matches": {},
 }

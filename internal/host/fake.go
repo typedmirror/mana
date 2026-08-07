@@ -17,7 +17,7 @@ type Fake struct {
 	Files     map[string]string // path -> contents
 	Shells    map[string]Shell  // command -> outcome
 	Answers   []string          // consumed by Ask, in order
-	Tools     map[string]func(object.Value) (object.Value, error)
+	Mods      map[string]Module // registry, shared by tools and modules alike
 	Ctx       Context
 
 	Written []Written // every WriteFile, in order
@@ -38,7 +38,7 @@ func NewFake() *Fake {
 		Responses: map[string]string{},
 		Files:     map[string]string{},
 		Shells:    map[string]Shell{},
-		Tools:     map[string]func(object.Value) (object.Value, error){},
+		Mods:      map[string]Module{},
 		Ctx: Context{
 			User:        "tester",
 			LastMessage: "run the report",
@@ -105,22 +105,46 @@ func (h *Fake) Ask(prompt string) (string, error) {
 	return answer, nil
 }
 
-// ToolNames returns the bound tools in sorted order. Map iteration order would
-// make `ask tools` produce a different list every run, and a test that passes
-// four times in five is worse than no test.
-func (h *Fake) ToolNames() []string {
-	names := make([]string, 0, len(h.Tools))
-	for name := range h.Tools {
+// Modules returns the registry in sorted order. Map iteration order would make
+// `ask tools` produce a different list every run, and a test that passes four
+// times in five is worse than no test.
+func (h *Fake) Modules() []string {
+	names := make([]string, 0, len(h.Mods))
+	for name := range h.Mods {
 		names = append(names, name)
 	}
 	sort.Strings(names)
 	return names
 }
 
-func (h *Fake) CallTool(name string, args object.Value) (object.Value, error) {
-	fn, ok := h.Tools[name]
-	if !ok {
-		return nil, fmt.Errorf("no tool named %q is bound in this environment", name)
-	}
-	return fn(args)
+func (h *Fake) Module(name string) (Module, bool) {
+	m, ok := h.Mods[name]
+	return m, ok
 }
+
+// Register binds a module with no custom clauses — the shape a plain tool has.
+func (h *Fake) Register(name string, fn func(Call) object.Value) {
+	h.Mods[name] = Func{ModuleName: name, Fn: fn}
+}
+
+// RegisterWithClauses binds a module that declares its own clause keywords.
+func (h *Fake) RegisterWithClauses(name string, clauses []string, fn func(Call) object.Value) {
+	h.Mods[name] = declaring{name: name, clauses: clauses, fn: fn}
+}
+
+// Calls records every module invocation, so a test can assert on what a script
+// asked a module to do rather than only on what came back.
+type Recorded struct {
+	Module string
+	Call   Call
+}
+
+type declaring struct {
+	name    string
+	clauses []string
+	fn      func(Call) object.Value
+}
+
+func (m declaring) Name() string                { return m.name }
+func (m declaring) Clauses() []string           { return m.clauses }
+func (m declaring) Execute(c Call) object.Value { return m.fn(c) }

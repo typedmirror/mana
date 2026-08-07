@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/typedmirror/mana/internal/ast"
+	"github.com/typedmirror/mana/internal/host"
 	"github.com/typedmirror/mana/internal/object"
 	"github.com/typedmirror/mana/internal/token"
 )
@@ -234,12 +235,25 @@ func (e *Evaluator) runTool(n *ast.Verb, sc *scope) object.Value {
 		}
 		args = v
 	}
-	out, err := e.host.CallTool(name, args)
-	if err != nil {
-		return e.adopt(n, &object.Err{
-			Reason:     err.Error(),
-			Suggestion: "check available tools with `ask tools`",
-		})
+	m, bad := e.module(n, name)
+	if bad != nil {
+		return bad
+	}
+	call := host.Call{Intent: e.currentIntent(), Clauses: map[string]object.Value{}}
+	if rec, isRec := args.(*object.Record); isRec {
+		for _, k := range rec.Keys() {
+			v, _ := rec.Get(k)
+			call.Clauses[k] = v
+		}
+	} else if _, isNull := args.(object.Null); !isNull {
+		call.Args = append(call.Args, args)
+	}
+	out := m.Execute(call)
+	if out == nil {
+		return e.fail(n, "module %q returned nothing", name)
+	}
+	if err, isErr := out.(*object.Err); isErr {
+		return e.adopt(n, err)
 	}
 	return out
 }
@@ -387,6 +401,10 @@ func (e *Evaluator) verbSend(n *ast.Verb, sc *scope, piped object.Value) object.
 	case dest == "output" || dest == "user":
 		fmt.Fprintln(e.host.Out(), object.Text(data))
 		return object.Null{}
+	case e.uses[dest]:
+		// `send @x to slack channel "ops"` — a destination naming a used module
+		// hands the value to it, with the module's own clauses attached.
+		return e.sendToModule(n, dest, data, sc)
 	case strings.HasPrefix(dest, "http://"), strings.HasPrefix(dest, "https://"):
 		body, err := e.host.Post(dest, object.JSON(data))
 		if err != nil {
@@ -394,10 +412,51 @@ func (e *Evaluator) verbSend(n *ast.Verb, sc *scope, piped object.Value) object.
 		}
 		return decode(body)
 	}
+	if _, installed := e.host.Module(dest); installed {
+		return e.adopt(n, &object.Err{
+			Reason:     fmt.Sprintf("module %q is not used in this act", dest),
+			Suggestion: fmt.Sprintf("add `use %s` to the act", dest),
+		})
+	}
 	return e.adopt(n, &object.Err{
 		Reason:     fmt.Sprintf("no destination named %q", dest),
-		Suggestion: "destinations are `output`, `user`, or an http(s) URL",
+		Suggestion: "destinations are `output`, `user`, an http(s) URL, or a used module",
 	})
+}
+
+// sendToModule delivers a value to a module destination (v2 §7.1).
+func (e *Evaluator) sendToModule(n *ast.Verb, name string, data object.Value, sc *scope) object.Value {
+	m, bad := e.module(n, name)
+	if bad != nil {
+		return bad
+	}
+	call := host.Call{
+		Target:  "send",
+		Args:    []object.Value{data},
+		Clauses: map[string]object.Value{},
+		Intent:  e.currentIntent(),
+	}
+	for _, c := range n.Clauses {
+		if c.Kw == token.TO {
+			continue // the destination itself, already resolved
+		}
+		if err := e.checkClause(n, m, c); err != nil {
+			return err
+		}
+		v := e.eval(c.Value, sc)
+		if object.IsErr(v) {
+			return v
+		}
+		call.Clauses[c.Name()] = v
+	}
+	out := m.Execute(call)
+	if out == nil {
+		return object.Null{}
+	}
+	if err, isErr := out.(*object.Err); isErr {
+		return e.adopt(n, err)
+	}
+	return out
 }
 
 // --- ask ---------------------------------------------------------------------
@@ -408,7 +467,7 @@ func (e *Evaluator) verbAsk(n *ast.Verb, sc *scope, piped object.Value) object.V
 	if len(n.Args) == 1 {
 		if id, ok := n.Args[0].(*ast.Identifier); ok && id.Value == "tools" {
 			out := &object.List{}
-			for _, name := range e.host.ToolNames() {
+			for _, name := range e.host.Modules() {
 				out.Elements = append(out.Elements, object.Word(name))
 			}
 			return out

@@ -32,6 +32,48 @@ type Context struct {
 	Now         string // timestamp, e.g. 2026-08-07T15:04:05Z
 }
 
+// Module is anything a script can reach through `use` (v2 §7.3).
+//
+// Clauses may return nil, which means the module accepts only the built-in
+// clause keywords. That optionality is what lets a plain tool and a
+// clause-declaring module share one interface without a second registry.
+type Module interface {
+	Name() string
+	Clauses() []string
+	Execute(Call) object.Value
+}
+
+// Call is one invocation of a module.
+//
+// SPEC NOTE: v2 §7.3 gives Execute the signature
+// `(target string, clauses map[string]Value, intent string)`, which has nowhere
+// to put a positional argument — but §7.1 writes `search_web "mana programming
+// language"`, which is exactly that. Call carries Args as well; the spec
+// signature cannot express its own example.
+type Call struct {
+	Target  string // the bare word after the module name, "" if there is none
+	Args    []object.Value
+	Clauses map[string]object.Value
+	Intent  string // the `--` line in force, supplied automatically
+}
+
+// Fail is how a module reports a failure. Errors are data here as everywhere
+// else (§12), so a module returns one rather than a Go error.
+func Fail(format string, args ...any) *object.Err {
+	return object.Errorf(format, args...)
+}
+
+// Func adapts a plain function to the Module interface. It declares no clauses,
+// which is the honest answer for a tool that never had any.
+type Func struct {
+	ModuleName string
+	Fn         func(Call) object.Value
+}
+
+func (m Func) Name() string                { return m.ModuleName }
+func (m Func) Clauses() []string           { return nil }
+func (m Func) Execute(c Call) object.Value { return m.Fn(c) }
+
 // Shell is the outcome of a `run`.
 type Shell struct {
 	Stdout string
@@ -48,10 +90,14 @@ type Host interface {
 	Post(url, body string) (string, error)
 	Ask(prompt string) (string, error)
 
-	// Tools are ambient (spec §11): the environment decides what exists, and a
-	// script never imports one.
-	ToolNames() []string
-	CallTool(name string, args object.Value) (object.Value, error)
+	// Modules extend the verb system (v2 §7). The environment decides what
+	// exists; a script reaches one with `use` and never imports it.
+	//
+	// Tools and modules are one registry, not two. Their shapes were already
+	// almost identical — a name and something to execute — and two registries
+	// would mean two lookup paths and two resolution rules for the same idea.
+	Modules() []string
+	Module(name string) (Module, bool)
 
 	Context() Context
 
@@ -170,13 +216,12 @@ func (h *Real) Ask(prompt string) (string, error) {
 	return strings.TrimSpace(scanner.Text()), nil
 }
 
-// ToolNames reports the ambient tools. The real host binds none: a script that
-// asks for a tool gets an honest empty list rather than a plausible-looking one.
-func (h *Real) ToolNames() []string { return nil }
+// Modules reports what this environment provides. The real host binds nothing
+// yet: a script asking for a module gets an honest empty list rather than a
+// plausible-looking one.
+func (h *Real) Modules() []string { return nil }
 
-func (h *Real) CallTool(name string, _ object.Value) (object.Value, error) {
-	return nil, fmt.Errorf("no tool named %q is bound in this environment", name)
-}
+func (h *Real) Module(string) (Module, bool) { return nil, false }
 
 func (h *Real) Context() Context {
 	now := time.Now().UTC()

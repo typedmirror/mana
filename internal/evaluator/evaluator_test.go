@@ -1,7 +1,6 @@
 package evaluator
 
 import (
-	"errors"
 	"strings"
 	"testing"
 
@@ -339,7 +338,7 @@ func TestCreateWithNoProviderFailsLoudly(t *testing.T) {
 
 func TestAskToolsListsAmbientTools(t *testing.T) {
 	h := host.NewFake()
-	h.Tools["search_web"] = func(object.Value) (object.Value, error) { return object.String("hits"), nil }
+	h.Register("search_web", func(host.Call) object.Value { return object.String("hits") })
 	v, _ := ok(t, h, "@tools = ask tools")
 	eq(t, v, "[search_web]")
 }
@@ -347,19 +346,37 @@ func TestAskToolsListsAmbientTools(t *testing.T) {
 func TestRunToolCallsIt(t *testing.T) {
 	h := host.NewFake()
 	var got object.Value
-	h.Tools["search_web"] = func(args object.Value) (object.Value, error) {
-		got = args
-		return object.String("hits"), nil
-	}
-	v, _ := ok(t, h, `@r = run tool search_web with query "mana language spec"`)
+	h.Register("search_web", func(c host.Call) object.Value {
+		got = c.Clauses["query"]
+		return object.String("hits")
+	})
+	v, _ := ok(t, h, "use search_web\n"+`@r = run tool search_web with query "mana language spec"`)
 	eq(t, v, "hits")
-	eq(t, got, `{ query: mana language spec }`)
+	// `with query "…"` arrives as a named clause, not as an opaque record — the
+	// module sees the keyword the script wrote.
+	eq(t, got, "mana language spec")
 }
 
 func TestUnknownToolFailsWithASuggestion(t *testing.T) {
 	err := bad(t, nil, `@r = run tool nope with query "x"`)
-	if !strings.Contains(err.Reason, "no tool named") || !strings.Contains(err.Suggestion, "ask tools") {
+	if !strings.Contains(err.Reason, `no module named "nope" is used`) {
 		t.Errorf("got %+v", err)
+	}
+}
+
+// TestRunToolStillNeedsUse: tools and modules are one registry, so `run tool X`
+// goes through the same permission gate as `X …`. Without this, an act that
+// declined to `use postgres` could still reach it through `run tool postgres`,
+// and the use boundary would be decorative.
+func TestRunToolStillNeedsUse(t *testing.T) {
+	h := host.NewFake()
+	h.Register("search_web", func(host.Call) object.Value { return object.String("hits") })
+	err := bad(t, h, `@r = run tool search_web with query "x"`)
+	if !strings.Contains(err.Reason, "is not used in this act") {
+		t.Errorf("got %q", err.Reason)
+	}
+	if !strings.Contains(err.Suggestion, "use search_web") {
+		t.Errorf("the error should name the fix: %q", err.Suggestion)
 	}
 }
 
@@ -916,8 +933,8 @@ func TestRunToolFailurePaths(t *testing.T) {
 
 func TestToolReturningAnErrorIsReported(t *testing.T) {
 	h := host.NewFake()
-	h.Tools["flaky"] = func(object.Value) (object.Value, error) { return nil, errTool }
-	if got := bad(t, h, `@x = run tool flaky with q "a"`).Reason; !strings.Contains(got, "tool exploded") {
+	h.Register("flaky", func(host.Call) object.Value { return host.Fail("tool exploded") })
+	if got := bad(t, h, "use flaky\n"+`@x = run tool flaky with q "a"`).Reason; !strings.Contains(got, "tool exploded") {
 		t.Errorf("got %q", got)
 	}
 }
@@ -999,9 +1016,6 @@ func TestFilterOnAListOfScalarsNamesTheProblem(t *testing.T) {
 		t.Errorf("got %q", got)
 	}
 }
-
-// errTool is the failure a scripted tool returns.
-var errTool = errors.New("tool exploded")
 
 // TestContextNowAndToday: v2 §16 uses context.env.now for a timestamp while
 // v1 §12 uses context.env.today for a date. They are different things, so both

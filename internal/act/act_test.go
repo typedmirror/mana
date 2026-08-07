@@ -372,8 +372,8 @@ act "join" depends on "left", "right" {
 
 func TestUseRecordsThePermissionSet(t *testing.T) {
 	h := host.NewFake()
-	h.Tools["inventory"] = func(object.Value) (object.Value, error) { return object.Null{}, nil }
-	h.Tools["slack"] = func(object.Value) (object.Value, error) { return object.Null{}, nil }
+	h.Register("inventory", func(host.Call) object.Value { return object.Null{} })
+	h.Register("slack", func(host.Call) object.Value { return object.Null{} })
 	r, _ := run(t, h, `act "reads" {
     use inventory
     send 1
@@ -481,5 +481,104 @@ func TestFlatScriptFailureStillReported(t *testing.T) {
 	}
 	if r.Outcomes[0].Status != Failed {
 		t.Errorf("got %+v", r.Outcomes[0])
+	}
+}
+
+// --- modules across a graph ---------------------------------------------------
+
+// TestModuleScopingAcrossActs is v2 §7.2's claim in full: the `use` boundary is
+// the permission boundary, and it holds per act rather than per job.
+func TestModuleScopingAcrossActs(t *testing.T) {
+	h := host.NewFake()
+	var stockCalls, slackCalls []host.Call
+	h.RegisterWithClauses("inventory", []string{"item"}, func(c host.Call) object.Value {
+		stockCalls = append(stockCalls, c)
+		r := object.NewRecord()
+		r.Set("available", object.Number(12))
+		return r
+	})
+	h.RegisterWithClauses("slack", []string{"channel"}, func(c host.Call) object.Value {
+		slackCalls = append(slackCalls, c)
+		return object.Null{}
+	})
+
+	r, _ := run(t, h, `act "check-inventory" {
+    use inventory
+
+    -- verify stock levels before the fulfillment run
+    @stock = inventory check item "widget-x"
+    send @stock
+}
+
+act "notify" depends on "check-inventory" {
+    use slack
+
+    -- tell ops what we found
+    @stock = act.check-inventory.result
+    send "available: " + @stock.available to slack channel "ops"
+}`)
+	if !r.OK() {
+		t.Fatalf("job failed: %v %+v", order(r), outcome(t, r, "notify").Err)
+	}
+	if len(stockCalls) != 1 || stockCalls[0].Target != "check" {
+		t.Fatalf("inventory: got %+v", stockCalls)
+	}
+	if got := stockCalls[0].Intent; got != "verify stock levels before the fulfillment run" {
+		t.Errorf("intent did not reach the module: %q", got)
+	}
+	if len(slackCalls) != 1 || slackCalls[0].Clauses["channel"].Inspect() != "ops" {
+		t.Fatalf("slack: got %+v", slackCalls)
+	}
+	if got := slackCalls[0].Args[0].Inspect(); got != "available: 12" {
+		t.Errorf("payload: got %q", got)
+	}
+}
+
+// TestAnActCannotReachAModuleItDidNotUse is the permission boundary failing
+// closed. The module is installed and another act uses it; this one did not.
+func TestAnActCannotReachAModuleItDidNotUse(t *testing.T) {
+	h := host.NewFake()
+	h.Register("postgres", func(host.Call) object.Value { return object.String("rows") })
+
+	r, _ := run(t, h, `act "reads" {
+    use postgres
+    send postgres query "SELECT 1"
+}
+
+act "notifies" depends on "reads" {
+    -- no `+"`use postgres`"+` here, so the database is out of reach
+    @x = postgres query "SELECT 2"
+    send @x
+}`)
+	if outcome(t, r, "reads").Status != Succeeded {
+		t.Fatalf("reads should have succeeded: %+v", outcome(t, r, "reads").Err)
+	}
+	o := outcome(t, r, "notifies")
+	if o.Status != Failed || !strings.Contains(o.Err.Reason, "is not used in this act") {
+		t.Fatalf("the use boundary did not hold: %+v", o)
+	}
+	if o.Err.Intent != "no `use postgres` here, so the database is out of reach" {
+		t.Errorf("intent: %q", o.Err.Intent)
+	}
+}
+
+func TestUsesAreReportedPerAct(t *testing.T) {
+	h := host.NewFake()
+	h.Register("a", func(host.Call) object.Value { return object.Null{} })
+	h.Register("b", func(host.Call) object.Value { return object.Null{} })
+	r, _ := run(t, h, `act "one" {
+    use a
+    send 1
+}
+
+act "two" {
+    use b
+    send 2
+}`)
+	if got := outcome(t, r, "one").Uses; len(got) != 1 || got[0] != "a" {
+		t.Errorf("got %v", got)
+	}
+	if got := outcome(t, r, "two").Uses; len(got) != 1 || got[0] != "b" {
+		t.Errorf("got %v", got)
 	}
 }
