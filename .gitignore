@@ -8,5 +8,6 @@ coverage.*
 
 docs
 .claude/
+CLAUDE.md
 
 .coverdata/
