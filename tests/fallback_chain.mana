@@ -1,0 +1,26 @@
+-- fallback chain: first success wins (spec §8.3)
+-- every option here is self-contained, so this script runs from any directory
+
+-- the first read fails, the shell command recovers
+@recovered = read ./definitely-absent-a.json
+          or run echo recovered
+          or { fallback: true }
+
+send @recovered to output
+
+-- all three reads fail, so the literal at the end is what survives
+@defaults = read ./definitely-absent-a.json
+         or read ./definitely-absent-b.json
+         or read ./definitely-absent-c.json
+         or { port: 8080, mode: "debug" }
+
+send @defaults to output
+
+-- a chain that succeeds immediately never evaluates the rest
+-- NOTE: `or` must start the next line after a `run`. A run captures its whole
+-- line as shell (spec §5.2), so an `or` written after it on the same line
+-- becomes part of the command instead of a fallback.
+@first = run echo immediate
+      or run echo never-reached
+
+send @first to output

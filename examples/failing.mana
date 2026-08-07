@@ -1,0 +1,9 @@
+-- the point of this script is that it fails, and says why
+-- it should exit non-zero and print the reasoning below
+
+@shell = run echo hello
+
+-- reading a file that is not there, on purpose
+@config = read ./definitely-not-here.json
+
+send @config to output

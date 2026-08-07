@@ -1,0 +1,25 @@
+-- pipe and transform chain (spec §7)
+
+@users = [
+    { name: "  ALICE  ", region: "eu", status: "active", visits: 9 }
+    { name: "bob", region: "us", status: "inactive", visits: 4 }
+    { name: "cara", region: "eu", status: "active", visits: 7 }
+    { name: "dan", region: "ap", status: "active", visits: 2 }
+]
+
+-- filter, order, project: the value flows left to right into send
+@active = @users |> filter where status is "active"
+@active |> sort by visits descending |> map name |> send to output
+
+-- transform chaining on strings
+@users -> map name -> trim -> lowercase |> send to output
+
+-- group, order by bucket size, keep the largest
+@users |> group by region |> sort by count descending |> take 1 |> map key |> send to output
+
+-- numeric reductions
+@active |> map visits |> sum |> send to output
+@users |> filter where visits >= 7 |> count |> send to output
+
+-- a comparison that reads as one sentence
+send @active -> count >= 3 to output

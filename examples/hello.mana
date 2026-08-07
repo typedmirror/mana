@@ -1,0 +1,23 @@
+-- a first script: no network, no files, runs anywhere
+
+@users = [
+    { name: "alice", region: "eu", status: "active" }
+    { name: "bob", region: "us", status: "inactive" }
+    { name: "cara", region: "eu", status: "active" }
+]
+
+-- keep only the active ones
+@active = @users |> filter where status is "active"
+
+-- summarise
+@report = {
+    date: context.env.today
+    total: @users -> count
+    active: @active -> count
+    regions: @active |> group by region |> map key
+}
+
+send @report to output
+
+-- the intent above this line is what a failure here would report
+send "done: " + @report.active + " of " + @report.total + " active" to output

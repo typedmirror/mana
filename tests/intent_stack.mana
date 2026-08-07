@@ -1,0 +1,12 @@
+-- intent stack: the most recent reasoning attaches to the failure (spec §15.3)
+-- this is the first entry and must NOT be the one reported
+
+@a = 1
+
+-- this is the second entry and must also not be reported
+@b = @a + 1
+
+-- this is the entry that should appear in the error below
+@c = read ./definitely-absent.json
+
+send @c to output

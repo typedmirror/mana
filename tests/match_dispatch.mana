@@ -1,0 +1,22 @@
+-- match dispatch on ok and err (spec §8.1)
+
+-- this command succeeds, so the ok arm runs
+@up = run echo healthy
+@up |> match {
+    ok status: send "ok arm: " + status to output
+    err why:   send "err arm: " + why to output
+}
+
+-- this file is absent, so the err arm runs and the failure is handled
+@missing = read ./definitely-absent.json
+@missing |> match {
+    ok body: send "ok arm: " + body to output
+    err why: send "err arm ran" to output
+}
+
+-- the wildcard binder discards the value
+@also = read ./definitely-absent.json
+@also |> match {
+    ok _:  send "unreachable" to output
+    err _: send "wildcard arm ran" to output
+}

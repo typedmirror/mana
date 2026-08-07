@@ -1,0 +1,12 @@
+bin/
+*.exe
+*.test
+*.out
+coverage.*
+.env
+.DS_Store
+
+docs
+.claude/
+
+.coverdata/

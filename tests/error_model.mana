@@ -1,0 +1,8 @@
+-- error model: the shape of a failure (spec §10.1)
+-- this script is meant to fail; it should exit 1 and print every field
+
+-- reading a file that was never going to be there
+@config = read ./definitely-absent.json
+
+-- unreachable: the binding above holds a failure nobody handled
+send @config to output

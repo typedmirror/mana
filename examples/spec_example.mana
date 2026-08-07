@@ -1,0 +1,45 @@
+-- daily user report script
+-- pulling active users and generating summary for stakeholders
+--
+-- This is spec §14 verbatim. It points at api.company.com, which does not
+-- exist, so running it directly will fail at the first fetch and fall through
+-- to ./cache/users.json — which is the behaviour it is supposed to have.
+--
+-- It is exercised against a scripted host in
+-- internal/evaluator/evaluator_test.go (TestSpecCompleteExampleRuns), where
+-- both the success path and the API-down path are checked. For a version that
+-- runs anywhere with no network, see examples/hello.mana.
+
+@endpoint = "https://api.company.com/v2"
+
+-- get all users, fall back to yesterday's cache if API is down
+@users = fetch @endpoint + "/users" or read ./cache/users.json
+
+-- filter to active users with recent logins
+@active = @users
+  |> filter where last_login > "2025-01-01"
+  |> filter where status is "active"
+
+-- build report structure
+@report = {
+    date: context.env.today
+    total_users: @users -> count
+    active_users: @active -> count
+    active_rate: @active -> count / @users -> count
+    top_regions: @active |> group by region |> sort by count descending |> take 5
+}
+
+-- write locally first
+write @report to ./reports/daily.json
+
+-- check if the dashboard is running before pushing
+@dash = run curl -s http://localhost:3000/health
+@dash |> match {
+    ok _:   -- dashboard up, push the report
+            send @report to https://localhost:3000/api/reports
+    err _:  -- dashboard down, notify
+            ask "dashboard is offline. send report by email instead?"
+}
+
+-- done
+send "daily report complete: " + @report.active_users + " active" to output
