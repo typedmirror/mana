@@ -277,6 +277,10 @@ func (l *Lexer) breakIsSignificant() bool {
 		return false
 	case l.wordAhead("or"):
 		return false
+	// A branch written across lines is one statement. `then` and `else` can
+	// only ever continue an `if`, so a break in front of either is layout.
+	case l.wordAhead("then"), l.wordAhead("else"):
+		return false
 	}
 	return true
 }

@@ -267,6 +267,7 @@ func (e *Evaluator) contextRecord() *object.Record {
 	env.Set("cwd", object.String(c.Cwd))
 	env.Set("os", object.String(c.OS))
 	env.Set("today", object.String(c.Today))
+	env.Set("now", object.String(c.Now))
 
 	msgs := &object.List{}
 	for _, m := range c.Messages {

@@ -444,3 +444,18 @@ func TestWithClauseFormsAreDistinguished(t *testing.T) {
 	eq(t, parse(t, `create user with @data`), `create user with @data`)
 	eq(t, parse(t, `create user with { a: 1 }`), `create user with { a: 1 }`)
 }
+
+// TestMultiLineConditional covers v2 §16, which writes if/then/else across
+// lines. A break before `then` or `else` is layout, not a statement end.
+func TestMultiLineConditional(t *testing.T) {
+	src := `if @n > 0 then
+    send "a" to output
+else
+    send "b" to output`
+	eq(t, parse(t, src), `if (@n > 0) then send "a" to output else send "b" to output`)
+}
+
+func TestMultiLineConditionalInsideAnExpression(t *testing.T) {
+	eq(t, parse(t, "@mode = if @c > 100\n    then \"batch\"\n    else \"single\""),
+		`@mode = if (@c > 100) then "batch" else "single"`)
+}

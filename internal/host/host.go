@@ -28,7 +28,8 @@ type Context struct {
 	Messages    []string
 	Cwd         string
 	OS          string
-	Today       string
+	Today       string // date, e.g. 2026-08-07
+	Now         string // timestamp, e.g. 2026-08-07T15:04:05Z
 }
 
 // Shell is the outcome of a `run`.
@@ -178,9 +179,11 @@ func (h *Real) CallTool(name string, _ object.Value) (object.Value, error) {
 }
 
 func (h *Real) Context() Context {
+	now := time.Now().UTC()
 	c := Context{
 		OS:    runtime.GOOS,
-		Today: time.Now().Format("2006-01-02"),
+		Today: now.Format("2006-01-02"),
+		Now:   now.Format(time.RFC3339),
 	}
 	if cwd, err := os.Getwd(); err == nil {
 		c.Cwd = cwd

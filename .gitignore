@@ -5,9 +5,12 @@ bin/
 coverage.*
 .env
 .DS_Store
+.coverdata/
 
-docs
+# The specs are tracked; everything else in docs/ is cross-session working
+# state and stays local, along with the harness config.
+docs/*
+!docs/spec.md
+!docs/specv2.md
 .claude/
 CLAUDE.md
-
-.coverdata/

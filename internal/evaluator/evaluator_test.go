@@ -1002,3 +1002,13 @@ func TestFilterOnAListOfScalarsNamesTheProblem(t *testing.T) {
 
 // errTool is the failure a scripted tool returns.
 var errTool = errors.New("tool exploded")
+
+// TestContextNowAndToday: v2 §16 uses context.env.now for a timestamp while
+// v1 §12 uses context.env.today for a date. They are different things, so both
+// exist rather than one replacing the other.
+func TestContextNowAndToday(t *testing.T) {
+	v, _ := ok(t, nil, "@x = context.env.today")
+	eq(t, v, "2026-08-07")
+	v, _ = ok(t, nil, "@x = context.env.now")
+	eq(t, v, "2026-08-07T09:00:00Z")
+}

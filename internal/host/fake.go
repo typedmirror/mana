@@ -46,6 +46,7 @@ func NewFake() *Fake {
 			Cwd:         "/work",
 			OS:          "testos",
 			Today:       "2026-08-07",
+			Now:         "2026-08-07T09:00:00Z",
 		},
 	}
 }
