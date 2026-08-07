@@ -19,17 +19,25 @@ var Version = "0.1.0-dev"
 const usage = `mana — an interpreted intent script for LLM agents
 
 usage:
-  mana <file.mana>     execute a script
-  mana                 start the REPL
-  mana --tokens <file> print the token stream, intent channel included
-  mana --help          show this message
-  mana --version       print the version
+  mana <file.mana>       execute a script
+  mana                   start the REPL
+
+flags:
+  --dry-run              report what the script would do, cause nothing
+  --trace                print the execution record afterwards, on stderr
+  --retry N              give a failed act N extra attempts
+  --tokens               print the token stream, intent channel included
+  --help                 show this message
+  --version              print the version
 
 exit codes:
   0  success
   1  runtime error (a verb failed, or a failure went unhandled)
   2  parse error
   3  file not found
+
+Script output goes to stdout; everything the runtime says about the run goes to
+stderr, so redirecting a script yields only what the script sent.
 `
 
 func main() { os.Exit(run(os.Args[1:])) }
@@ -44,6 +52,9 @@ func run(args []string) int {
 	fs_.Usage = func() {}
 	tokens := fs_.Bool("tokens", false, "print the token stream instead of running")
 	version := fs_.Bool("version", false, "print the version")
+	trace := fs_.Bool("trace", false, "print the execution record after the run")
+	dryRun := fs_.Bool("dry-run", false, "report what the script would do, without doing it")
+	retries := fs_.Int("retry", 0, "extra attempts for a failed act")
 	if err := fs_.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			fmt.Fprint(os.Stdout, usage)
@@ -82,5 +93,13 @@ func run(args []string) int {
 		repl.DumpTokens(string(src), os.Stdout)
 		return repl.ExitOK
 	}
-	return repl.Run(string(src), h)
+	if *retries < 0 {
+		fmt.Fprintln(os.Stderr, "mana: --retry cannot be negative")
+		return repl.ExitParse
+	}
+	return repl.RunWith(string(src), h, repl.Options{
+		Retries: *retries,
+		Trace:   *trace,
+		DryRun:  *dryRun,
+	})
 }

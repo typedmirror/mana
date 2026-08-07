@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/typedmirror/mana/internal/host"
+	"github.com/typedmirror/mana/internal/object"
 )
 
 func TestRunReportsFailureThroughTheExitCode(t *testing.T) {
@@ -155,5 +156,77 @@ func TestUnclosedCountsTokensNotBytes(t *testing.T) {
 	}
 	if !unclosed("@d |> match {") {
 		t.Error("a genuinely open block was not detected")
+	}
+}
+
+// --- v2 run modes -------------------------------------------------------------
+
+func TestDryRunGoesToStdoutAndCausesNothing(t *testing.T) {
+	h := host.NewFake()
+	code := RunWith(`act "a" {
+    write "x" to ./out.json
+    send 1
+}`, h, Options{DryRun: true})
+
+	if code != ExitOK {
+		t.Fatalf("got exit %d", code)
+	}
+	if len(h.Written) != 0 {
+		t.Errorf("a dry run wrote files: %+v", h.Written)
+	}
+	// With --dry-run the plan *is* the output, so it belongs on stdout.
+	if !strings.Contains(h.Stdout.String(), "would  write") {
+		t.Errorf("got %q", h.Stdout.String())
+	}
+}
+
+func TestDryRunReportsAnUnrunnableGraph(t *testing.T) {
+	h := host.NewFake()
+	code := RunWith(`act "a" depends on "b" { send 1 }
+act "b" depends on "a" { send 2 }`, h, Options{DryRun: true})
+	if code != ExitRuntime {
+		t.Fatalf("got exit %d", code)
+	}
+	if !strings.Contains(h.Stderr.String(), "dependency cycle") {
+		t.Errorf("got %q", h.Stderr.String())
+	}
+}
+
+// TestTraceIsCommentaryNotOutput: the trace describes the run, so it must not
+// mix into what the script sent.
+func TestTraceIsCommentaryNotOutput(t *testing.T) {
+	h := host.NewFake()
+	code := RunWith(`act "a" {
+    -- doing the thing
+    send "payload" to output
+}`, h, Options{Trace: true})
+
+	if code != ExitOK {
+		t.Fatalf("got exit %d", code)
+	}
+	if strings.TrimSpace(h.Stdout.String()) != "payload" {
+		t.Errorf("stdout should hold only the script's output: %q", h.Stdout.String())
+	}
+	if !strings.Contains(h.Stderr.String(), "Trace:") || !strings.Contains(h.Stderr.String(), "doing the thing") {
+		t.Errorf("stderr should hold the trace: %q", h.Stderr.String())
+	}
+}
+
+func TestRetryFlagReachesTheScheduler(t *testing.T) {
+	h := host.NewFake()
+	calls := 0
+	h.Register("svc", func(host.Call) object.Value {
+		calls++
+		if calls == 1 {
+			return host.Fail("transient")
+		}
+		return object.String("ok")
+	})
+	code := RunWith("use svc\n@r = svc ping\nsend @r to output", h, Options{Retries: 1})
+	if code != ExitOK {
+		t.Fatalf("got exit %d: %s", code, h.Stderr.String())
+	}
+	if calls != 2 {
+		t.Errorf("calls: got %d, want 2", calls)
 	}
 }

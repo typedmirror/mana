@@ -71,6 +71,9 @@ type Outcome struct {
 	HasResult bool
 	Err       *object.Err
 	Reason    string // why it was skipped
+	Depends   []string
+	Attempts  int           // 1 unless the act was retried
+	Started   time.Duration // from the start of the job
 	Duration  time.Duration
 	Uses      []string
 	Intents   []string
@@ -80,6 +83,15 @@ type Outcome struct {
 type Report struct {
 	Outcomes []Outcome // in completion-wave order, then alphabetical within a wave
 	Err      *object.Err
+	Elapsed  time.Duration
+}
+
+// Options tune a run.
+type Options struct {
+	// Retries is how many extra attempts a failed act gets. Retrying is cheap
+	// because a dependency that already succeeded keeps its result (v2 §14.1,
+	// §14.2): only the failed act runs again, never the graph behind it.
+	Retries int
 }
 
 // OK reports whether every act succeeded.
@@ -113,9 +125,14 @@ func Split(prog *ast.Program) (acts []*ast.Act, loose []ast.Statement) {
 // guessed at: there is no stated order between a loose statement and an act,
 // and inventing one would make the script mean something the spec does not say.
 func Run(prog *ast.Program, h host.Host) *Report {
+	return RunWith(prog, h, Options{})
+}
+
+// RunWith executes a job with options.
+func RunWith(prog *ast.Program, h host.Host, opts Options) *Report {
 	acts, loose := Split(prog)
 	if len(acts) == 0 {
-		return runFlat(prog, h)
+		return runFlat(prog, h, opts)
 	}
 	for _, s := range loose {
 		switch s.(type) {
@@ -130,26 +147,31 @@ func Run(prog *ast.Program, h host.Host) *Report {
 			}}
 		}
 	}
-	return runGraph(acts, h)
+	return runGraph(acts, h, opts)
 }
 
 // runFlat runs a script with no act declarations. It is an act — an unnamed one
 // whose body is the file (v2 §4.4) — so it gets the same treatment.
-func runFlat(prog *ast.Program, h host.Host) *Report {
-	e := evaluator.New(h)
+func runFlat(prog *ast.Program, h host.Host, opts Options) *Report {
 	start := time.Now()
-	v := e.Run(prog)
-	out := Outcome{Name: "", Status: Succeeded, Duration: time.Since(start), Uses: e.Uses(), Intents: e.Intents()}
-	if err, bad := v.(*object.Err); bad {
-		out.Status, out.Err = Failed, err
-	} else {
-		out.Result, out.HasResult = e.Result()
+	var out Outcome
+	for attempt := 0; attempt <= opts.Retries; attempt++ {
+		e := evaluator.New(h)
+		v := e.Run(prog)
+		out = Outcome{Name: "", Status: Succeeded, Attempts: attempt + 1, Uses: e.Uses(), Intents: e.Intents()}
+		if err, bad := v.(*object.Err); bad {
+			out.Status, out.Err = Failed, err
+		} else {
+			out.Result, out.HasResult = e.Result()
+			break
+		}
 	}
-	return &Report{Outcomes: []Outcome{out}}
+	out.Duration = time.Since(start)
+	return &Report{Outcomes: []Outcome{out}, Elapsed: out.Duration}
 }
 
 // runGraph resolves the dependency graph and executes it wave by wave.
-func runGraph(acts []*ast.Act, h host.Host) *Report {
+func runGraph(acts []*ast.Act, h host.Host, opts Options) *Report {
 	byName, err := index(acts)
 	if err != nil {
 		return &Report{Err: err}
@@ -167,6 +189,7 @@ func runGraph(acts []*ast.Act, h host.Host) *Report {
 	table := NewTable()
 	report := &Report{}
 	done := map[string]Status{}
+	jobStart := time.Now()
 
 	for len(done) < len(acts) {
 		ready := readyActs(acts, done)
@@ -181,13 +204,13 @@ func runGraph(acts []*ast.Act, h host.Host) *Report {
 		var wg sync.WaitGroup
 		for i, a := range ready {
 			if reason, blocked := blockedBy(a, done); blocked {
-				outcomes[i] = Outcome{Name: a.Name, Status: Skipped, Reason: reason}
+				outcomes[i] = Outcome{Name: a.Name, Status: Skipped, Reason: reason, Depends: a.Depends, Started: time.Since(jobStart)}
 				continue
 			}
 			wg.Add(1)
 			go func(i int, a *ast.Act) {
 				defer wg.Done()
-				outcomes[i] = runOne(a, h, table)
+				outcomes[i] = runOne(a, h, table, opts, jobStart)
 			}(i, a)
 		}
 		wg.Wait()
@@ -197,19 +220,37 @@ func runGraph(acts []*ast.Act, h host.Host) *Report {
 			report.Outcomes = append(report.Outcomes, o)
 		}
 	}
+	report.Elapsed = time.Since(jobStart)
 	return report
 }
 
-// runOne executes a single act with its own evaluator (v2 §17.5).
-func runOne(a *ast.Act, h host.Host, table *Table) Outcome {
-	e := evaluator.NewForAct(h, a.Name, a.Depends, table)
-	start := time.Now()
+// runOne executes a single act, retrying it on failure up to the configured
+// limit. Each attempt gets a fresh evaluator — an act that half-ran should not
+// see its own leftovers on the way round again.
+func runOne(a *ast.Act, h host.Host, table *Table, opts Options, jobStart time.Time) Outcome {
+	started := time.Since(jobStart)
+	var out Outcome
+	for attempt := 0; attempt <= opts.Retries; attempt++ {
+		out = attemptOne(a, h, table)
+		out.Attempts = attempt + 1
+		if out.Status == Succeeded {
+			break
+		}
+	}
+	out.Started = started
+	out.Duration = time.Since(jobStart) - started
+	out.Depends = a.Depends
+	return out
+}
 
+func attemptOne(a *ast.Act, h host.Host, table *Table) Outcome {
+	e := evaluator.NewForAct(h, a.Name, a.Depends, table)
 	out := Outcome{Name: a.Name, Status: Succeeded}
+
 	for _, u := range a.Uses {
 		if v := e.Run(&ast.Program{Statements: []ast.Statement{&ast.Use{Tok: a.Tok, Module: u}}}); object.IsErr(v) {
 			out.Status, out.Err = Failed, v.(*object.Err)
-			out.Duration, out.Uses, out.Intents = time.Since(start), e.Uses(), e.Intents()
+			out.Uses, out.Intents = e.Uses(), e.Intents()
 			return out
 		}
 	}
@@ -219,7 +260,6 @@ func runOne(a *ast.Act, h host.Host, table *Table) Outcome {
 		body = a.Body.Statements
 	}
 	v := e.Run(&ast.Program{Statements: body})
-	out.Duration = time.Since(start)
 	out.Uses, out.Intents = e.Uses(), e.Intents()
 
 	if err, bad := v.(*object.Err); bad {

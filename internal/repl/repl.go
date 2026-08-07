@@ -38,9 +38,19 @@ const (
 // commentary rather than output.
 func dim(s string) string { return "\x1b[2m" + s + "\x1b[0m" }
 
+// Options control one script run.
+type Options struct {
+	Retries int  // extra attempts for a failed act
+	Trace   bool // print the execution record afterwards
+	DryRun  bool // report what would happen, cause nothing
+}
+
 // Run executes a whole script and returns the process exit code. Diagnostics go
 // to the host's error stream; only what the script `send`s reaches stdout.
-func Run(src string, h host.Host) int {
+func Run(src string, h host.Host) int { return RunWith(src, h, Options{}) }
+
+// RunWith executes a script with options.
+func RunWith(src string, h host.Host, opts Options) int {
 	p := parser.New(src)
 	prog := p.Parse()
 	if errs := p.Errors(); len(errs) > 0 {
@@ -49,7 +59,24 @@ func Run(src string, h host.Host) int {
 		}
 		return ExitParse
 	}
-	report := act.Run(prog, h)
+
+	if opts.DryRun {
+		plan, err := act.DryRun(prog, h)
+		if err != nil {
+			fmt.Fprintln(h.Err(), err.Inspect())
+			return ExitRuntime
+		}
+		// The plan goes to stdout: with --dry-run it *is* the output, and the
+		// script produced none of its own.
+		fmt.Fprint(h.Out(), plan.String())
+		return ExitOK
+	}
+
+	report := act.RunWith(prog, h, act.Options{Retries: opts.Retries})
+	if opts.Trace {
+		// Commentary about the run, not the run's output.
+		fmt.Fprint(h.Err(), act.Trace(report))
+	}
 	if report.Err != nil {
 		fmt.Fprintln(h.Err(), report.Err.Inspect())
 		return ExitRuntime
