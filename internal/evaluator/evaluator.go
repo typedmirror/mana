@@ -13,6 +13,8 @@ package evaluator
 
 import (
 	"fmt"
+	"sort"
+	"strings"
 
 	"github.com/typedmirror/mana/internal/ast"
 	"github.com/typedmirror/mana/internal/host"
@@ -30,11 +32,61 @@ type Evaluator struct {
 	// REPL uses it to show reasoning flowing past; nothing else needs it,
 	// which is why the evaluator does not write to a stream itself.
 	OnIntent func(string)
+
+	// Act mode. One evaluator per act (v2 §17.5) — these fields are owned by a
+	// single act and never shared, which is what makes concurrent acts safe
+	// without any locking in here.
+	actName   string
+	inAct     bool
+	uses      map[string]bool
+	deps      map[string]bool
+	results   Results
+	result    object.Value
+	resultSet bool
 }
 
-// New returns an Evaluator that will cause its effects through h.
+// Results is read access to other acts' results. The concrete table is
+// synchronized and lives with the scheduler; the evaluator only reads.
+type Results interface {
+	Result(act string) (object.Value, bool)
+}
+
+// New returns an Evaluator for a flat script — which is to say an unnamed act
+// whose body is the whole file (v2 §4.4).
 func New(h host.Host) *Evaluator {
-	return &Evaluator{host: h, binds: map[string]object.Value{}}
+	return &Evaluator{
+		host:  h,
+		binds: map[string]object.Value{},
+		inAct: true,
+		uses:  map[string]bool{},
+		deps:  map[string]bool{},
+	}
+}
+
+// NewForAct returns an Evaluator scoped to one named act: its own bindings, its
+// own intent stack, its own use set, and read access to the results of the acts
+// it declared as dependencies.
+func NewForAct(h host.Host, name string, deps []string, results Results) *Evaluator {
+	e := New(h)
+	e.actName = name
+	e.results = results
+	for _, d := range deps {
+		e.deps[d] = true
+	}
+	return e
+}
+
+// Result reports what the act sent, and whether it sent anything at all.
+func (e *Evaluator) Result() (object.Value, bool) { return e.result, e.resultSet }
+
+// Uses reports the modules this act loaded — its permission set (v2 §7.2).
+func (e *Evaluator) Uses() []string {
+	out := make([]string, 0, len(e.uses))
+	for m := range e.uses {
+		out = append(out, m)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // Intents returns the reasoning collected so far, oldest first. Exposed because
@@ -153,6 +205,12 @@ func (e *Evaluator) evalStatement(node ast.Statement, sc *scope) object.Value {
 		return e.eval(s.Expression, sc)
 	case *ast.Block:
 		return e.runStatements(s.Statements, sc)
+	case *ast.Use:
+		return e.evalUse(s)
+	case *ast.Act:
+		// The scheduler lifts acts out before evaluation; one reaching here
+		// means a script mixed acts with loose statements.
+		return e.fail(s, "act %q cannot run here — a script is either flat or made of acts", s.Name)
 	}
 	return e.fail(node, "unknown statement %T", node)
 }
@@ -211,6 +269,8 @@ func (e *Evaluator) eval(node ast.Expression, sc *scope) object.Value {
 			return e.fail(n, "@ is only meaningful inside a transform")
 		}
 		return v
+	case *ast.ActRef:
+		return e.evalActRef(n)
 	case *ast.ListLiteral:
 		return e.evalList(n, sc)
 	case *ast.RecordLiteral:
@@ -368,6 +428,16 @@ func (e *Evaluator) evalPipe(n *ast.Pipe, sc *scope) object.Value {
 	if object.IsErr(left) {
 		return left
 	}
+	// A verb on the left of a pipe has already run, and most produce nothing to
+	// chain. Saying so beats letting the next stage complain about a null:
+	// `send @x |> filter …` is a shape that is easy to write and easy to
+	// misread.
+	if verb, isVerb := n.Left.(*ast.Verb); isVerb {
+		if _, isNull := left.(object.Null); isNull {
+			return e.fail(n, "`%s` produced no value to pipe into %s — write `<value> |> %s |> %s`",
+				verb.Tok.Literal, n.Stage.String(), n.Stage.String(), verb.Tok.Literal)
+		}
+	}
 	switch stage := n.Stage.(type) {
 	case *ast.Transform:
 		return e.evalTransform(stage, left, sc)
@@ -406,4 +476,61 @@ func (e *Evaluator) evalMatch(n *ast.Match, subject object.Value, sc *scope) obj
 		return e.evalStatement(arm.Body, armScope)
 	}
 	return subject
+}
+
+// --- acts --------------------------------------------------------------------
+
+// evalUse loads a module into this act's scope (v2 §7.1). A module the
+// environment does not provide is an error rather than a silently empty
+// capability — the `use` set is the permission boundary, so a `use` that
+// quietly did nothing would be a permission granted over nothing.
+func (e *Evaluator) evalUse(s *ast.Use) object.Value {
+	for _, name := range e.host.ToolNames() {
+		if name == s.Module {
+			e.uses[s.Module] = true
+			return object.Null{}
+		}
+	}
+	available := e.host.ToolNames()
+	if len(available) == 0 {
+		return e.adopt(s, &object.Err{
+			Reason:     fmt.Sprintf("no module named %q is available", s.Module),
+			Suggestion: "this environment provides no modules",
+		})
+	}
+	return e.adopt(s, &object.Err{
+		Reason:     fmt.Sprintf("no module named %q is available", s.Module),
+		Suggestion: "available: " + strings.Join(available, ", "),
+	})
+}
+
+// evalActRef reads another act's result (v2 §4.3).
+//
+// Reading an act that was not declared as a dependency is an error even when a
+// result happens to be sitting in the table. The dependency edge is the only
+// thing that orders the two acts, so without it the read is a race that would
+// succeed or fail depending on scheduling.
+func (e *Evaluator) evalActRef(n *ast.ActRef) object.Value {
+	if e.results == nil {
+		return e.fail(n, "act.%s.result is only available inside an act", n.Name)
+	}
+	if !e.deps[n.Name] {
+		return e.fail(n, "act %q is not a dependency of %q — add `depends on %q`", n.Name, e.actName, n.Name)
+	}
+	v, ok := e.results.Result(n.Name)
+	if !ok {
+		return e.fail(n, "act %q produced no result", n.Name)
+	}
+	return v
+}
+
+// setResult records what this act sends (v2 §4.6). A second `send` overwrites
+// the first, and says so, because two results from one act means the script
+// believes something the runtime cannot honour.
+func (e *Evaluator) setResult(n ast.Node, v object.Value) object.Value {
+	if e.resultSet {
+		return e.fail(n, "act %q already sent a result", e.actName)
+	}
+	e.result, e.resultSet = v, true
+	return object.Null{}
 }

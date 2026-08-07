@@ -30,6 +30,17 @@ var scripts = []script{
 	{name: "fallback_chain", exit: repl.ExitOK},
 	{name: "pipe_transform", exit: repl.ExitOK},
 	{name: "match_dispatch", exit: repl.ExitOK},
+	{name: "act_graph", exit: repl.ExitOK},
+	{
+		name: "act_failure",
+		exit: repl.ExitRuntime,
+		errContains: []string{
+			`act broken:`,
+			`intent: "the upstream service is unreachable"`,
+			`reason: "inventory offline"`,
+			`act downstream: skipped — dependency "broken" failed`,
+		},
+	},
 	{
 		name: "error_model",
 		exit: repl.ExitRuntime,
@@ -93,10 +104,14 @@ func compareGolden(t *testing.T, path, got string) {
 	}
 }
 
-// TestFailingScriptsWriteNothingToStdout is the separation the exit code relies
-// on: piping a script's output somewhere must never mix in the runtime's own
+// TestDiagnosticsNeverReachStdout is the separation the exit code relies on:
+// piping a script's output somewhere must never mix in the runtime's own
 // commentary about it.
-func TestFailingScriptsWriteNothingToStdout(t *testing.T) {
+//
+// Note this is not "a failing script writes nothing" — in an act graph one act
+// can succeed and emit while another fails, and that partial output is correct.
+// The invariant is about which stream, not about emptiness.
+func TestDiagnosticsNeverReachStdout(t *testing.T) {
 	for _, s := range scripts {
 		if s.exit == repl.ExitOK {
 			continue
@@ -107,8 +122,10 @@ func TestFailingScriptsWriteNothingToStdout(t *testing.T) {
 		}
 		var stdout, stderr strings.Builder
 		repl.Run(string(src), host.NewReal(&stdout, &stderr, strings.NewReader("")))
-		if stdout.String() != "" {
-			t.Errorf("%s wrote to stdout while failing: %q", s.name, stdout.String())
+		for _, leak := range []string{"status: err", "skipped —", "parse error"} {
+			if strings.Contains(stdout.String(), leak) {
+				t.Errorf("%s leaked %q onto stdout: %q", s.name, leak, stdout.String())
+			}
 		}
 	}
 }

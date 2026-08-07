@@ -184,6 +184,15 @@ func (l *Lexer) scan() token.Token {
 	case isLetter(l.ch):
 		start := l.pos
 		lit := l.readIdentifier()
+		// `act.<name>.result` is lexed whole. Act names are hyphenated
+		// throughout the spec, so read as ordinary tokens
+		// `act.check-inventory.result` becomes a subtraction — which parses,
+		// and is wrong.
+		if lit == "act" && l.ch == '.' {
+			if name, ok := l.readActRef(); ok {
+				return token.Token{Type: token.ACTREF, Literal: name, Line: line}
+			}
+		}
 		// `https://...` — an identifier immediately followed by "://" is a
 		// scheme, not a name. Rewind conceptually and take the whole word.
 		if l.ch == ':' && l.peekChar() == '/' && l.peekAt(2) == '/' {
@@ -201,6 +210,29 @@ func (l *Lexer) scan() token.Token {
 	default:
 		return l.single(token.ILLEGAL, line)
 	}
+}
+
+// readActRef consumes `.<name>.result` after the word `act`, returning the act
+// name. It reports false and rewinds if the shape does not match, so a plain
+// field access on something called `act` is unaffected.
+func (l *Lexer) readActRef() (string, bool) {
+	mark := *l
+
+	l.readChar() // past '.'
+	start := l.pos
+	for isLetter(l.ch) || isDigit(l.ch) || l.ch == '-' {
+		l.readChar()
+	}
+	name := l.input[start:l.pos]
+
+	if name == "" || !l.wordAhead(".result") {
+		*l = mark
+		return "", false
+	}
+	for range ".result" {
+		l.readChar()
+	}
+	return name, true
 }
 
 // runIsToolCall distinguishes `run tool search_web with ...` (spec §11, a named
@@ -263,7 +295,7 @@ func (l *Lexer) skipToSignificant() (token.Token, bool) {
 func (l *Lexer) breakIsSignificant() bool {
 	switch l.prev {
 	case token.IDENT, token.BINDING, token.SELF, token.NUMBER, token.STRING,
-		token.PATH, token.URL, token.RAW, token.TRUE, token.FALSE,
+		token.PATH, token.URL, token.RAW, token.TRUE, token.FALSE, token.ACTREF,
 		token.RPAREN, token.RBRACKET, token.RBRACE:
 	default:
 		// INTENT lands here deliberately: it already consumed to end of line,

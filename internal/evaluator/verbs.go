@@ -351,9 +351,15 @@ func render(format string, v object.Value) (string, *object.Err) {
 
 // --- send --------------------------------------------------------------------
 
-// verbSend emits a result. `to` is required: a send with no destination is the
-// kind of statement that looks like it did something and did not.
+// verbSend emits a result, or — inside an act body, with no destination — sets
+// that act's result (v2 §4.6).
 func (e *Evaluator) verbSend(n *ast.Verb, sc *scope, piped object.Value) object.Value {
+	// `send err <reason>` fails the enclosing act. Checked before arguments are
+	// evaluated, because `err` is a marker here rather than a value.
+	if id, isErr := sendErrMarker(n); isErr {
+		return e.sendErr(n, id, sc)
+	}
+
 	data := piped
 	if data == nil {
 		v, ok := e.argValue(n, 0, sc)
@@ -367,7 +373,7 @@ func (e *Evaluator) verbSend(n *ast.Verb, sc *scope, piped object.Value) object.
 	}
 	destVal, ok := e.clauseValue(n, token.TO, sc)
 	if !ok {
-		return e.fail(n, "send needs a destination — `send <value> to output`")
+		return e.sendWithoutDestination(n, data, sc)
 	}
 	if object.IsErr(destVal) {
 		return destVal
@@ -424,4 +430,49 @@ func (e *Evaluator) verbAsk(n *ast.Verb, sc *scope, piped object.Value) object.V
 		return e.adopt(n, &object.Err{Reason: err.Error()})
 	}
 	return object.String(answer)
+}
+
+// sendErrMarker reports whether a send is the `send err <reason>` form. The
+// marker is a bare `err` as the first argument, which is why it is detected on
+// the syntax rather than on an evaluated value.
+func sendErrMarker(n *ast.Verb) (*ast.Identifier, bool) {
+	if len(n.Args) < 1 {
+		return nil, false
+	}
+	if _, hasTo := n.Clause(token.TO); hasTo {
+		return nil, false
+	}
+	id, ok := n.Args[0].(*ast.Identifier)
+	if !ok || id.Value != "err" {
+		return nil, false
+	}
+	return id, true
+}
+
+// sendErr fails the enclosing act with a stated reason (v2 §4.6).
+func (e *Evaluator) sendErr(n *ast.Verb, marker *ast.Identifier, sc *scope) object.Value {
+	if !e.inAct {
+		return e.fail(n, "`send err` sets an act's failure and is only meaningful inside an act")
+	}
+	if len(n.Args) < 2 {
+		return e.fail(n, "`send err` needs a reason — `send err \"what went wrong\"`")
+	}
+	reason := e.eval(n.Args[1], sc)
+	if object.IsErr(reason) {
+		return reason
+	}
+	_ = marker
+	return e.adopt(n, &object.Err{Reason: object.Text(reason)})
+}
+
+// sendWithoutDestination handles a `send` with no `to` clause.
+//
+// Inside an act that is the act's result (v2 §4.6). Outside one it stays an
+// error, deliberately: a send with nowhere to go looks like it did something
+// and did not, and outside an act there is no result for it to become.
+func (e *Evaluator) sendWithoutDestination(n *ast.Verb, data object.Value, sc *scope) object.Value {
+	if !e.inAct {
+		return e.fail(n, "send needs a destination — `send <value> to output`")
+	}
+	return e.setResult(n, data)
 }

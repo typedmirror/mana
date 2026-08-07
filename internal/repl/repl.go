@@ -11,6 +11,7 @@ import (
 	"io"
 	"strings"
 
+	"github.com/typedmirror/mana/internal/act"
 	"github.com/typedmirror/mana/internal/evaluator"
 	"github.com/typedmirror/mana/internal/host"
 	"github.com/typedmirror/mana/internal/lexer"
@@ -48,11 +49,34 @@ func Run(src string, h host.Host) int {
 		}
 		return ExitParse
 	}
-	if err, bad := evaluator.New(h).Run(prog).(*object.Err); bad {
-		fmt.Fprintln(h.Err(), err.Inspect())
+	report := act.Run(prog, h)
+	if report.Err != nil {
+		fmt.Fprintln(h.Err(), report.Err.Inspect())
+		return ExitRuntime
+	}
+	for _, o := range report.Outcomes {
+		switch o.Status {
+		case act.Failed:
+			fmt.Fprintln(h.Err(), label(o.Name)+o.Err.Inspect())
+		case act.Skipped:
+			// Not a success. An act that never ran because a dependency broke
+			// has to be visible, or the job reads as partially fine.
+			fmt.Fprintf(h.Err(), "%sskipped — %s\n", label(o.Name), o.Reason)
+		}
+	}
+	if !report.OK() {
 		return ExitRuntime
 	}
 	return ExitOK
+}
+
+// label prefixes a diagnostic with the act it came from. A flat script has no
+// name, so it gets no prefix.
+func label(name string) string {
+	if name == "" {
+		return ""
+	}
+	return "act " + name + ": "
 }
 
 // Start runs the interactive loop until in is exhausted. Bindings persist

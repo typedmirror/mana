@@ -86,6 +86,69 @@ func (s *ExpressionStatement) statementNode() {}
 func (s *ExpressionStatement) Line() int      { return s.Tok.Line }
 func (s *ExpressionStatement) String() string { return s.Expression.String() }
 
+// Act is Mana's execution unit (spec v2 §4). It owns an intent stack, a tool
+// scope, and a result. Acts with no dependency edge between them run
+// concurrently — the dependency graph is the concurrency model.
+//
+// From is set instead of Body when the act is imported from another file
+// (§4.5).
+type Act struct {
+	Tok     token.Token
+	Name    string
+	Depends []string
+	Uses    []string
+	Body    *Block
+	From    string
+}
+
+func (s *Act) statementNode() {}
+func (s *Act) Line() int      { return s.Tok.Line }
+func (s *Act) String() string {
+	var b strings.Builder
+	b.WriteString("act " + strconv.Quote(s.Name))
+	if s.From != "" {
+		return b.String() + " from " + s.From
+	}
+	if len(s.Depends) > 0 {
+		quoted := make([]string, len(s.Depends))
+		for i, d := range s.Depends {
+			quoted[i] = strconv.Quote(d)
+		}
+		b.WriteString(" depends on " + strings.Join(quoted, ", "))
+	}
+	b.WriteString(" {")
+	for _, u := range s.Uses {
+		b.WriteString(" use " + u + ";")
+	}
+	if s.Body != nil && len(s.Body.Statements) > 0 {
+		b.WriteString(" " + s.Body.String())
+	}
+	b.WriteString(" }")
+	return b.String()
+}
+
+// Use loads a module into the enclosing act's scope (spec v2 §7.1). The `use`
+// boundary is the permission boundary — an act that does not use a module
+// cannot reach it.
+type Use struct {
+	Tok    token.Token
+	Module string
+}
+
+func (s *Use) statementNode() {}
+func (s *Use) Line() int      { return s.Tok.Line }
+func (s *Use) String() string { return "use " + s.Module }
+
+// ActRef is `act.<name>.result` (spec v2 §4.3).
+type ActRef struct {
+	Tok  token.Token
+	Name string
+}
+
+func (e *ActRef) expressionNode() {}
+func (e *ActRef) Line() int       { return e.Tok.Line }
+func (e *ActRef) String() string  { return "act." + e.Name + ".result" }
+
 // Block is a sequence of statements, used for match arm bodies (spec §8.1).
 type Block struct {
 	Tok        token.Token

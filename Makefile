@@ -39,12 +39,13 @@ cover:
 # scripted host in internal/evaluator/evaluator_test.go.
 examples: build
 	./bin/$(BINARY) examples/hello.mana
+	./bin/$(BINARY) examples/acts.mana
 	@! ./bin/$(BINARY) examples/failing.mana >/dev/null 2>&1 && echo "failing.mana exited non-zero, as intended"
-	@for s in tests/fallback_chain tests/pipe_transform tests/match_dispatch; do \
+	@for s in tests/fallback_chain tests/pipe_transform tests/match_dispatch tests/act_graph; do \
 		./bin/$(BINARY) $$s.mana | diff -q - $$s.expected >/dev/null \
 			&& echo "$$s.mana matches its golden output" || exit 1; \
 	done
-	@for s in tests/error_model tests/intent_stack; do \
+	@for s in tests/error_model tests/intent_stack tests/act_failure; do \
 		./bin/$(BINARY) $$s.mana >/dev/null 2>&1; \
 		test $$? -eq 1 && echo "$$s.mana exited 1, as intended" || exit 1; \
 	done

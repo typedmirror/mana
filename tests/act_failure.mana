@@ -1,0 +1,15 @@
+-- a failing act stops its dependents, and says so (spec v2 §4, I1)
+-- this script must exit 1
+
+act "healthy" {
+    send "this one is fine" to output
+}
+
+act "broken" {
+    -- the upstream service is unreachable
+    send err "inventory offline"
+}
+
+act "downstream" depends on "broken" {
+    send "must never run" to output
+}

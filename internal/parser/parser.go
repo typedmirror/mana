@@ -151,6 +151,18 @@ func (p *Parser) skipStatementEnd() {
 }
 
 func (p *Parser) parseStatement() ast.Statement {
+	// `act` and `use` are contextual, not reserved. Axiom 1 says the syntax
+	// should sit on words an LLM already emits — which is also a reason not to
+	// take those words away from field names. They are recognised by shape:
+	// `act "name"` and `use <module>`.
+	if p.wordIs(0, "act") && p.at(1).Type == token.STRING {
+		return p.parseAct()
+	}
+	if p.wordIs(0, "use") && isWord(p.at(1)) {
+		tok := p.next()
+		return &ast.Use{Tok: tok, Module: p.next().Literal}
+	}
+
 	switch p.cur().Type {
 	case token.INTENT:
 		tok := p.next()
@@ -200,6 +212,9 @@ func (p *Parser) parsePrefix() ast.Expression {
 	case token.SELF:
 		p.next()
 		return &ast.Self{Tok: tok}
+	case token.ACTREF:
+		p.next()
+		return &ast.ActRef{Tok: tok, Name: tok.Literal}
 	case token.NUMBER:
 		p.next()
 		v, err := strconv.ParseFloat(tok.Literal, 64)
@@ -421,6 +436,18 @@ func (p *Parser) parseVerb() ast.Expression {
 		v.Clauses = p.parseClauses()
 		return v
 	}
+	// Arguments stop at `|>`. Two alternatives were tried and measured, and
+	// both were worse:
+	//
+	//   - Lowering every verb's argument below `|>` fixes `send @x |> f` but
+	//     breaks `fetch <url> |> count`, which then pipes the URL into count.
+	//   - Lowering it for `send` and `ask` only — the verbs whose argument is a
+	//     value rather than a locator — works until a trailing clause, where
+	//     `send @x |> f to output` absorbs `to output` as a clause of `f` and
+	//     silently sets the act result instead of printing. Trading a loud trap
+	//     for a silent one is not a trade.
+	//
+	// So the shape stays, and evalPipe carries a diagnostic naming the fix.
 	for startsArgument(p.cur().Type) {
 		a := p.parseExpression(pipe)
 		if a == nil {
@@ -464,6 +491,96 @@ func (p *Parser) parseClauseValue(kw token.Type) ast.Expression {
 	return p.parseExpression(pipe)
 }
 
+// parseAct reads an act declaration (spec v2 §4).
+//
+//	act "name" { … }
+//	act "name" depends on "a", "b" { … }
+//	act "name" from ./other.mana
+func (p *Parser) parseAct() ast.Statement {
+	tok := p.next() // 'act'
+	a := &ast.Act{Tok: tok, Name: p.next().Literal}
+	if a.Name == "" {
+		p.errorf(tok, "an act needs a name")
+		return nil
+	}
+
+	if p.wordIs(0, "from") || p.curIs(token.FROM) {
+		p.next()
+		src := p.cur()
+		if src.Type != token.PATH && src.Type != token.STRING {
+			p.errorf(src, "act %q: `from` needs a path, got %s(%q)", a.Name, src.Type, src.Literal)
+			return nil
+		}
+		p.next()
+		a.From = src.Literal
+		return a
+	}
+
+	if p.wordIs(0, "depends") {
+		p.next()
+		if !p.wordIs(0, "on") {
+			p.errorf(p.cur(), "act %q: expected `on` after `depends`", a.Name)
+			return nil
+		}
+		p.next()
+		for {
+			dep := p.cur()
+			if dep.Type != token.STRING {
+				p.errorf(dep, "act %q: a dependency is a quoted act name, got %s(%q)", a.Name, dep.Type, dep.Literal)
+				return nil
+			}
+			p.next()
+			a.Depends = append(a.Depends, dep.Literal)
+			if !p.curIs(token.COMMA) {
+				break
+			}
+			p.next()
+			p.skipNewlines()
+		}
+	}
+
+	if !p.expect(token.LBRACE) {
+		return nil
+	}
+	body := &ast.Block{Tok: p.cur()}
+	for {
+		p.skipNewlines()
+		if p.curIs(token.RBRACE) || p.curIs(token.EOF) {
+			break
+		}
+		before := p.i
+		s := p.parseStatement()
+		switch inner := s.(type) {
+		case *ast.Use:
+			// Collected onto the act rather than left in the body: the use set
+			// is the act's permission boundary, not a runtime step.
+			a.Uses = append(a.Uses, inner.Module)
+		case *ast.Act:
+			p.errorf(inner.Tok, "act %q: acts cannot be nested", a.Name)
+		case nil:
+		default:
+			body.Statements = append(body.Statements, s)
+		}
+		if p.i == before {
+			p.next()
+		}
+		if _, intent := s.(*ast.IntentStatement); !intent && !p.curIs(token.RBRACE) {
+			p.skipStatementEnd()
+		}
+	}
+	if !p.expect(token.RBRACE) {
+		return nil
+	}
+	a.Body = body
+	return a
+}
+
+// wordIs reports whether the token n ahead is the bare word w.
+func (p *Parser) wordIs(n int, w string) bool {
+	tok := p.at(n)
+	return isWord(tok) && tok.Literal == w
+}
+
 // isWord reports whether tok is a bare word — an identifier or a keyword being
 // used as one.
 func isWord(tok token.Token) bool {
@@ -479,7 +596,7 @@ func isWord(tok token.Token) bool {
 func startsArgument(t token.Type) bool {
 	switch t {
 	case token.IDENT, token.BINDING, token.SELF, token.NUMBER, token.STRING,
-		token.PATH, token.URL, token.TRUE, token.FALSE,
+		token.PATH, token.URL, token.TRUE, token.FALSE, token.ACTREF,
 		token.LBRACE, token.LBRACKET, token.LPAREN, token.IF, token.MATCH:
 		return true
 	}

@@ -1,0 +1,29 @@
+-- an act graph: two branches that run at the same time, then join
+-- no network, no files — runs anywhere
+
+act "collect" {
+    -- the shared input for the whole job
+    send [
+        { name: "alice", region: "eu", visits: 9 }
+        { name: "bob", region: "us", visits: 4 }
+        { name: "cara", region: "eu", visits: 7 }
+    ]
+}
+
+act "by-region" depends on "collect" {
+    -- no edge to top-visitors, so these two run concurrently
+    @users = act.collect.result
+    @regions = @users |> group by region |> sort by count descending |> map key
+    send @regions
+}
+
+act "top-visitors" depends on "collect" {
+    @users = act.collect.result
+    @top = @users |> filter where visits >= 7 |> map name |> sort
+    send @top
+}
+
+act "report" depends on "by-region", "top-visitors" {
+    -- waits for both branches
+    send { regions: act.by-region.result, top: act.top-visitors.result } to output
+}

@@ -1,0 +1,33 @@
+-- act dependency graph (spec v2 §4)
+-- root fans out to two independent acts, which join at the end
+
+act "collect" {
+    -- the source data for the whole job
+    @users = [
+        { name: "alice", region: "eu", visits: 9 }
+        { name: "bob", region: "us", visits: 4 }
+        { name: "cara", region: "eu", visits: 7 }
+    ]
+    send @users
+}
+
+act "by-region" depends on "collect" {
+    -- these two run concurrently: neither depends on the other
+    @users = act.collect.result
+    @regions = @users |> group by region |> sort by count descending |> map key
+    send @regions
+}
+
+act "top-visitors" depends on "collect" {
+    @users = act.collect.result
+    @top = @users |> filter where visits >= 7 |> map name |> sort
+    send @top
+}
+
+act "report" depends on "by-region", "top-visitors" {
+    -- joins both branches
+    @regions = act.by-region.result
+    @top = act.top-visitors.result
+
+    send { regions: @regions, top: @top, generated: context.env.today } to output
+}

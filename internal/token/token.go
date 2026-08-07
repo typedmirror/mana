@@ -33,6 +33,12 @@ const (
 	// verbatim. Spec §5.2: "No escaping, no subprocess wrapper."
 	RAW = Type("RAW")
 
+	// ACTREF is a whole `act.<name>.result` reference, carrying the act name as
+	// its literal. It is one token because act names are hyphenated throughout
+	// the spec, and `act.check-inventory.result` otherwise lexes as a
+	// subtraction that parses cleanly and means something else entirely.
+	ACTREF = Type("ACTREF")
+
 	IDENT   = Type("IDENT")   // filter, name, count
 	BINDING = Type("BINDING") // @users -> literal "users"
 	SELF    = Type("SELF")    // @ inside a transform (spec §7.3)

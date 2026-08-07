@@ -459,3 +459,25 @@ func TestMultiLineConditionalInsideAnExpression(t *testing.T) {
 	eq(t, parse(t, "@mode = if @c > 100\n    then \"batch\"\n    else \"single\""),
 		`@mode = if (@c > 100) then "batch" else "single"`)
 }
+
+// TestVerbArgumentsStopAtThePipe pins the precedence and, with it, the two
+// rejected alternatives. `fetch <url> |> count` must count the response, not
+// pipe the URL into count — and the cost, `send @x |> f` meaning
+// `(send @x) |> f`, is the lesser of the measured options.
+func TestVerbArgumentsStopAtThePipe(t *testing.T) {
+	eq(t, parse(t, "send @users |> group by region to output"),
+		"(send @users |> group by region to output)")
+	eq(t, parse(t, "@n = fetch https://api.com/users |> count"),
+		"@n = (fetch https://api.com/users |> count)")
+	eq(t, parse(t, "@n = read ./data.json |> count"),
+		"@n = (read ./data.json |> count)")
+}
+
+// TestFallbackStillOutranksBothArgumentForms guards the precedence that was
+// already load-bearing: `or` belongs to the binding, never to an argument list.
+func TestFallbackStillOutranksBothArgumentForms(t *testing.T) {
+	eq(t, parse(t, `@u = fetch user 1 or create user with role "basic"`),
+		`@u = (fetch user 1 or create user with { role: "basic" })`)
+	eq(t, parse(t, `@x = send @a to output or send @b to output`),
+		"@x = (send @a to output or send @b to output)")
+}
