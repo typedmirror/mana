@@ -202,9 +202,18 @@ func (e *Evaluator) verbRun(n *ast.Verb, sc *scope) object.Value {
 	if n.Shell == "" {
 		return e.runTool(n, sc)
 	}
-	out, err := e.host.Run(n.Shell)
+	out, err := e.host.Run(n.Shell, e.timeout)
 	if err != nil {
 		return e.adopt(n, &object.Err{Reason: err.Error()})
+	}
+	if out.Truncated {
+		e.note("run %q: output was truncated at %d KB", n.Shell, host.MaxOutputBytes>>10)
+	}
+	if out.TimedOut {
+		return e.adopt(n, &object.Err{
+			Reason:     fmt.Sprintf("timed out after %s", e.runTimeout()),
+			Suggestion: "raise the limit with --timeout, or background it: `run " + n.Shell + " > /dev/null 2>&1 &`",
+		})
 	}
 	if out.Code != 0 {
 		reason := fmt.Sprintf("exit %d", out.Code)
@@ -212,6 +221,12 @@ func (e *Evaluator) verbRun(n *ast.Verb, sc *scope) object.Value {
 			reason += ": " + msg
 		}
 		return e.adopt(n, &object.Err{Reason: reason})
+	}
+	// A command can succeed and still say something. The value stays the
+	// stdout string, because that is what a script wants to work with — but
+	// dropping stderr entirely would be silent loss, so it is recorded.
+	if msg := strings.TrimSpace(out.Stderr); msg != "" {
+		e.note("run %q: exit 0 with stderr: %s", n.Shell, msg)
 	}
 	return object.String(strings.TrimRight(out.Stdout, "\n"))
 }

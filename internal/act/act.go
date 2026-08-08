@@ -77,6 +77,7 @@ type Outcome struct {
 	Duration  time.Duration
 	Uses      []string
 	Intents   []string
+	Steps     []evaluator.Step // one per `--` block
 }
 
 // Report is the whole job.
@@ -88,6 +89,9 @@ type Report struct {
 
 // Options tune a run.
 type Options struct {
+	// Timeout bounds each shell command. Zero means the host's default.
+	Timeout time.Duration
+
 	// Retries is how many extra attempts a failed act gets. Retrying is cheap
 	// because a dependency that already succeeded keeps its result (v2 §14.1,
 	// §14.2): only the failed act runs again, never the graph behind it.
@@ -157,8 +161,9 @@ func runFlat(prog *ast.Program, h host.Host, opts Options) *Report {
 	var out Outcome
 	for attempt := 0; attempt <= opts.Retries; attempt++ {
 		e := evaluator.New(h)
+		e.SetTimeout(opts.Timeout)
 		v := e.Run(prog)
-		out = Outcome{Name: "", Status: Succeeded, Attempts: attempt + 1, Uses: e.Uses(), Intents: e.Intents()}
+		out = Outcome{Name: "", Status: Succeeded, Attempts: attempt + 1, Uses: e.Uses(), Intents: e.Intents(), Steps: e.Steps()}
 		if err, bad := v.(*object.Err); bad {
 			out.Status, out.Err = Failed, err
 		} else {
@@ -231,7 +236,7 @@ func runOne(a *ast.Act, h host.Host, table *Table, opts Options, jobStart time.T
 	started := time.Since(jobStart)
 	var out Outcome
 	for attempt := 0; attempt <= opts.Retries; attempt++ {
-		out = attemptOne(a, h, table)
+		out = attemptOne(a, h, table, opts)
 		out.Attempts = attempt + 1
 		if out.Status == Succeeded {
 			break
@@ -243,14 +248,15 @@ func runOne(a *ast.Act, h host.Host, table *Table, opts Options, jobStart time.T
 	return out
 }
 
-func attemptOne(a *ast.Act, h host.Host, table *Table) Outcome {
+func attemptOne(a *ast.Act, h host.Host, table *Table, opts Options) Outcome {
 	e := evaluator.NewForAct(h, a.Name, a.Depends, table)
+	e.SetTimeout(opts.Timeout)
 	out := Outcome{Name: a.Name, Status: Succeeded}
 
 	for _, u := range a.Uses {
 		if v := e.Run(&ast.Program{Statements: []ast.Statement{&ast.Use{Tok: a.Tok, Module: u}}}); object.IsErr(v) {
 			out.Status, out.Err = Failed, v.(*object.Err)
-			out.Uses, out.Intents = e.Uses(), e.Intents()
+			out.Uses, out.Intents, out.Steps = e.Uses(), e.Intents(), e.Steps()
 			return out
 		}
 	}
@@ -260,7 +266,7 @@ func attemptOne(a *ast.Act, h host.Host, table *Table) Outcome {
 		body = a.Body.Statements
 	}
 	v := e.Run(&ast.Program{Statements: body})
-	out.Uses, out.Intents = e.Uses(), e.Intents()
+	out.Uses, out.Intents, out.Steps = e.Uses(), e.Intents(), e.Steps()
 
 	if err, bad := v.(*object.Err); bad {
 		out.Status, out.Err = Failed, err

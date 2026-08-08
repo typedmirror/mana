@@ -321,8 +321,10 @@ act "notify" depends on "gather" {
 
 	for _, want := range []string{
 		"gather", "notify",
-		`intent: "pull the day's numbers"`,
-		`intent: "tell ops"`,
+		// Each `--` block appears as its own line, with the one that failed
+		// marked — the model's own segmentation of the work, reported back.
+		"· 0ms      pull the day's numbers",
+		"✗ 0ms      tell ops",
 		"tools:  [slack]",
 		"deps:   [gather]",
 		"reason: slack is down",

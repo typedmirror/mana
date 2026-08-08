@@ -7,6 +7,7 @@ package host
 
 import (
 	"bufio"
+	"context"
 	"fmt"
 	"io"
 	"net/http"
@@ -15,6 +16,7 @@ import (
 	"os/user"
 	"runtime"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/typedmirror/mana/internal/object"
@@ -76,17 +78,60 @@ func (m Func) Execute(c Call) object.Value { return m.Fn(c) }
 
 // Shell is the outcome of a `run`.
 type Shell struct {
-	Stdout string
-	Stderr string
-	Code   int
+	Stdout    string
+	Stderr    string
+	Code      int
+	Truncated bool // output exceeded MaxOutputBytes and was cut
+	TimedOut  bool // the command was killed at the deadline
 }
+
+// MaxOutputBytes bounds what a single command may return, per stream.
+//
+// Mana exists so a model can fire one artifact and read one result, which makes
+// the result the model's context. An unbounded `run find /` would be a context
+// bomb, so output is cut and the cut is stated rather than hidden.
+const MaxOutputBytes = 32 << 10
+
+// DefaultTimeout bounds a single command.
+//
+// Without one, `run npm start` never returns and the whole job hangs with
+// nothing to show for it — the worst outcome for a caller that fired once and
+// is waiting. Long-running work is backgrounded through the shell instead; see
+// Run.
+const DefaultTimeout = 2 * time.Minute
+
+// capped collects output up to a limit and remembers whether it overflowed.
+type capped struct {
+	buf   []byte
+	total int
+}
+
+func (c *capped) Write(p []byte) (int, error) {
+	c.total += len(p)
+	if room := MaxOutputBytes - len(c.buf); room > 0 {
+		if len(p) < room {
+			room = len(p)
+		}
+		c.buf = append(c.buf, p[:room]...)
+	}
+	return len(p), nil
+}
+
+func (c *capped) String() string {
+	if c.total <= len(c.buf) {
+		return string(c.buf)
+	}
+	return fmt.Sprintf("%s\n… truncated, %d bytes total", c.buf, c.total)
+}
+
+func (c *capped) overflowed() bool { return c.total > len(c.buf) }
 
 // Host is every side effect Mana can cause.
 type Host interface {
 	Fetch(url string) (string, error)
 	ReadFile(path string) (string, error)
 	WriteFile(path, content string) error
-	Run(command string) (Shell, error)
+	Run(command string, timeout time.Duration) (Shell, error)
 	Post(url, body string) (string, error)
 	Ask(prompt string) (string, error)
 
@@ -171,20 +216,56 @@ func (h *Real) WriteFile(path, content string) error {
 	return os.WriteFile(path, []byte(content), 0o644)
 }
 
-// Run executes a command through the user's shell. Spec §5.2: "The agent's bash
+// Run executes a command through the user's shell. Spec §6.2: "The agent's bash
 // is Mana's bash" — so no argument splitting and no sandbox, which is a
 // deliberate capability, not an oversight.
-func (h *Real) Run(command string) (Shell, error) {
+//
+// Two bounds are not negotiable. A command is killed at the deadline, and each
+// stream is capped. Both exist because the caller is usually a model that fired
+// once and is waiting: a hang gives it nothing, and a gigabyte gives it too
+// much.
+//
+// A command that should outlive the run is backgrounded through the shell —
+// `run ./server & disown` — which needs no language feature because the shell
+// already has one. Redirect its streams (`> /dev/null 2>&1`) or the pipe stays
+// open and the deadline applies after all.
+func (h *Real) Run(command string, timeout time.Duration) (Shell, error) {
 	sh := os.Getenv("SHELL")
 	if sh == "" {
 		sh = "/bin/sh"
 	}
-	cmd := exec.Command(sh, "-c", command)
-	var stdout, stderr strings.Builder
+	if timeout <= 0 {
+		timeout = DefaultTimeout
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, sh, "-c", command)
+	// Kill the whole process group: a shell that spawned children and died
+	// would otherwise leave them holding the pipes.
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Cancel = func() error {
+		if cmd.Process == nil {
+			return nil
+		}
+		return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+	}
+
+	var stdout, stderr capped
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 	err := cmd.Run()
-	out := Shell{Stdout: stdout.String(), Stderr: stderr.String()}
+
+	out := Shell{
+		Stdout:    stdout.String(),
+		Stderr:    stderr.String(),
+		Truncated: stdout.overflowed() || stderr.overflowed(),
+	}
+	if ctx.Err() == context.DeadlineExceeded {
+		out.TimedOut = true
+		out.Code = -1
+		return out, nil
+	}
 	var exitErr *exec.ExitError
 	if err != nil {
 		if ok := asExitError(err, &exitErr); ok {
@@ -238,3 +319,20 @@ func (h *Real) Context() Context {
 	}
 	return c
 }
+
+// Capture wraps a Host and diverts script output into a buffer.
+//
+// It exists for --json, where the report is the answer: the script's own output
+// belongs inside that document rather than interleaved with it, or a caller
+// parsing the result has to separate two things that arrived on one stream.
+type Capture struct {
+	Host
+	buf strings.Builder
+}
+
+func NewCapture(h Host) *Capture { return &Capture{Host: h} }
+
+func (c *Capture) Out() io.Writer { return &c.buf }
+
+// Text is everything the script sent to output.
+func (c *Capture) Text() string { return c.buf.String() }

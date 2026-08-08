@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"time"
 
 	"github.com/typedmirror/mana/internal/act"
 	"github.com/typedmirror/mana/internal/evaluator"
@@ -40,9 +41,11 @@ func dim(s string) string { return "\x1b[2m" + s + "\x1b[0m" }
 
 // Options control one script run.
 type Options struct {
-	Retries int  // extra attempts for a failed act
-	Trace   bool // print the execution record afterwards
-	DryRun  bool // report what would happen, cause nothing
+	Retries int           // extra attempts for a failed act
+	Trace   bool          // print the execution record afterwards
+	DryRun  bool          // report what would happen, cause nothing
+	JSON    bool          // emit the report as JSON instead of running normally
+	Timeout time.Duration // bound on each shell command; zero uses the default
 }
 
 // Run executes a whole script and returns the process exit code. Diagnostics go
@@ -72,7 +75,30 @@ func RunWith(src string, h host.Host, opts Options) int {
 		return ExitOK
 	}
 
-	report := act.RunWith(prog, h, act.Options{Retries: opts.Retries})
+	// With --json the report is the answer, so the script's own output is
+	// gathered into it rather than interleaved with it on the same stream.
+	runHost := h
+	var captured *host.Capture
+	if opts.JSON {
+		captured = host.NewCapture(h)
+		runHost = captured
+	}
+
+	report := act.RunWith(prog, runHost, act.Options{Retries: opts.Retries, Timeout: opts.Timeout})
+
+	if opts.JSON {
+		blob, err := act.JSON(report, captured.Text())
+		if err != nil {
+			fmt.Fprintln(h.Err(), "could not encode the report: "+err.Error())
+			return ExitRuntime
+		}
+		fmt.Fprintln(h.Out(), string(blob))
+		if !report.OK() {
+			return ExitRuntime
+		}
+		return ExitOK
+	}
+
 	if opts.Trace {
 		// Commentary about the run, not the run's output.
 		fmt.Fprint(h.Err(), act.Trace(report))

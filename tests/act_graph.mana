@@ -29,5 +29,7 @@ act "report" depends on "by-region", "top-visitors" {
     @regions = act.by-region.result
     @top = act.top-visitors.result
 
-    send { regions: @regions, top: @top, generated: context.env.today } to output
+    -- no date field here on purpose: a golden that embeds today's date
+    -- passes until midnight and then fails for no reason anyone changed
+    send { regions: @regions, top: @top } to output
 }

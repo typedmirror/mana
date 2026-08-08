@@ -494,7 +494,14 @@ func (p *Parser) parseTransform() ast.Expression {
 	if startsArgument(p.cur().Type) && !isDirection(p.cur()) {
 		t.Arg = p.parseExpression(arrow)
 	}
-	t.Clauses = p.parseClauses()
+	// A transform takes only the two clause keywords it actually uses.
+	//
+	// Accepting the whole built-in set made `send @x -> count to output` read as
+	// `send (@x -> count to output)`: `count` absorbed the destination, `send`
+	// was left without one, and the value silently became the act's result
+	// instead of being printed. A clause that belongs to the enclosing verb has
+	// to stay with it.
+	t.Clauses = p.parseTransformClauses()
 	// `sort by count descending` — the direction trails the clause it modifies.
 	if isDirection(p.cur()) {
 		t.Direction = p.next().Literal
@@ -561,6 +568,20 @@ func (p *Parser) parseVerb() ast.Expression {
 		return nil
 	}
 	return v
+}
+
+// parseTransformClauses reads `where` and `by`, and nothing else. Every other
+// keyword belongs to whatever encloses the transform.
+func (p *Parser) parseTransformClauses() []ast.Clause {
+	var out []ast.Clause
+	for p.curIs(token.WHERE) || p.curIs(token.BY) {
+		c := p.parseOneClause()
+		if c == nil {
+			return out
+		}
+		out = append(out, *c)
+	}
+	return out
 }
 
 func (p *Parser) parseClauses() []ast.Clause {

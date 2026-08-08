@@ -24,8 +24,10 @@ usage:
 
 flags:
   --dry-run              report what the script would do, cause nothing
+  --json                 emit the run report as JSON, for a machine reader
   --trace                print the execution record afterwards, on stderr
   --retry N              give a failed act N extra attempts
+  --timeout D            bound each shell command (default 2m)
   --tokens               print the token stream, intent channel included
   --help                 show this message
   --version              print the version
@@ -55,6 +57,8 @@ func run(args []string) int {
 	trace := fs_.Bool("trace", false, "print the execution record after the run")
 	dryRun := fs_.Bool("dry-run", false, "report what the script would do, without doing it")
 	retries := fs_.Int("retry", 0, "extra attempts for a failed act")
+	asJSON := fs_.Bool("json", false, "emit the run report as JSON")
+	timeout := fs_.Duration("timeout", 0, "bound on each shell command (default 2m)")
 	if err := fs_.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			fmt.Fprint(os.Stdout, usage)
@@ -101,5 +105,7 @@ func run(args []string) int {
 		Retries: *retries,
 		Trace:   *trace,
 		DryRun:  *dryRun,
+		JSON:    *asJSON,
+		Timeout: *timeout,
 	})
 }

@@ -121,8 +121,8 @@ func (e *Evaluator) transformFilter(n *ast.Transform, input object.Value, sc *sc
 }
 
 func (e *Evaluator) transformMap(n *ast.Transform, input object.Value, sc *scope) object.Value {
-	expr, ok := selector(n, token.TO)
-	if !ok {
+	expr := n.Arg
+	if expr == nil {
 		return e.fail(n, "map needs an expression — `map <field>` or `map { ... }`")
 	}
 	elems, err := e.elements(n, input)

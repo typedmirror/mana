@@ -1,8 +1,10 @@
 package repl
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/typedmirror/mana/internal/host"
 	"github.com/typedmirror/mana/internal/object"
@@ -228,5 +230,86 @@ func TestRetryFlagReachesTheScheduler(t *testing.T) {
 	}
 	if calls != 2 {
 		t.Errorf("calls: got %d, want 2", calls)
+	}
+}
+
+func TestJSONReportGathersOutputAndSteps(t *testing.T) {
+	h := host.NewFake()
+	h.Shells["echo hi"] = host.Shell{Stdout: "hi"}
+	code := RunWith("-- step one\n@a = run echo hi\n\n-- step two\nsend @a to output", h,
+		Options{JSON: true})
+	if code != ExitOK {
+		t.Fatalf("got exit %d: %s", code, h.Stderr.String())
+	}
+	var doc struct {
+		OK     bool   `json:"ok"`
+		Output string `json:"output"`
+		Acts   []struct {
+			Steps []struct {
+				Intent string `json:"intent"`
+				Status string `json:"status"`
+			} `json:"steps"`
+		} `json:"acts"`
+	}
+	if err := json.Unmarshal([]byte(h.Stdout.String()), &doc); err != nil {
+		t.Fatalf("the report is not valid JSON: %v\n%s", err, h.Stdout.String())
+	}
+	if !doc.OK {
+		t.Error("job should have succeeded")
+	}
+	// The script's own output belongs inside the document, not beside it.
+	if strings.TrimSpace(doc.Output) != "hi" {
+		t.Errorf("output: got %q", doc.Output)
+	}
+	if len(doc.Acts) != 1 || len(doc.Acts[0].Steps) != 2 {
+		t.Fatalf("got %+v", doc.Acts)
+	}
+	if doc.Acts[0].Steps[0].Intent != "step one" {
+		t.Errorf("got %q", doc.Acts[0].Steps[0].Intent)
+	}
+}
+
+func TestJSONIsTheWholeAnswerOnStdout(t *testing.T) {
+	h := host.NewFake()
+	RunWith(`send "payload" to output`, h, Options{JSON: true})
+	// Exactly one document: the script's output must not be interleaved.
+	if err := json.Unmarshal([]byte(h.Stdout.String()), &map[string]any{}); err != nil {
+		t.Errorf("stdout is not a single JSON document: %v\n%s", err, h.Stdout.String())
+	}
+}
+
+func TestJSONCarriesAFailureAndExitsNonZero(t *testing.T) {
+	h := host.NewFake()
+	code := RunWith("-- reaching for a file that is not there\n@c = read ./absent.json", h, Options{JSON: true})
+	if code != ExitRuntime {
+		t.Fatalf("got exit %d", code)
+	}
+	var doc struct {
+		OK   bool `json:"ok"`
+		Acts []struct {
+			Status string `json:"status"`
+			Error  struct {
+				Intent string `json:"intent"`
+				Reason string `json:"reason"`
+			} `json:"error"`
+		} `json:"acts"`
+	}
+	if err := json.Unmarshal([]byte(h.Stdout.String()), &doc); err != nil {
+		t.Fatalf("%v\n%s", err, h.Stdout.String())
+	}
+	if doc.OK {
+		t.Error("ok should be false")
+	}
+	if doc.Acts[0].Error.Intent != "reaching for a file that is not there" {
+		t.Errorf("the intent must survive into the machine-readable report: %+v", doc.Acts[0].Error)
+	}
+}
+
+func TestTimeoutFlagReachesTheHost(t *testing.T) {
+	h := host.NewFake()
+	h.Shells["quick"] = host.Shell{Stdout: "ok"}
+	RunWith("@x = run quick", h, Options{Timeout: 7 * time.Second})
+	if len(h.Ran) != 1 || h.Ran[0].Timeout != 7*time.Second {
+		t.Fatalf("got %+v", h.Ran)
 	}
 }

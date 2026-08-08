@@ -465,8 +465,13 @@ func TestMultiLineConditionalInsideAnExpression(t *testing.T) {
 // pipe the URL into count — and the cost, `send @x |> f` meaning
 // `(send @x) |> f`, is the lesser of the measured options.
 func TestVerbArgumentsStopAtThePipe(t *testing.T) {
-	eq(t, parse(t, "send @users |> group by region to output"),
-		"(send @users |> group by region to output)")
+	// The shape that used to misparse silently is now a syntax error: the
+	// destination cannot be absorbed by the transform, so it has nowhere to go
+	// and the parser says so.
+	errs := parseErr(t, "send @users |> group by region to output")
+	if !strings.Contains(errs[0], `unexpected TO`) {
+		t.Errorf("got %v", errs)
+	}
 	eq(t, parse(t, "@n = fetch https://api.com/users |> count"),
 		"@n = (fetch https://api.com/users |> count)")
 	eq(t, parse(t, "@n = read ./data.json |> count"),
@@ -480,4 +485,17 @@ func TestFallbackStillOutranksBothArgumentForms(t *testing.T) {
 		`@u = (fetch user 1 or create user with { role: "basic" })`)
 	eq(t, parse(t, `@x = send @a to output or send @b to output`),
 		"@x = (send @a to output or send @b to output)")
+}
+
+// TestATransformCannotStealAnEnclosingClause is the fix for a silent failure.
+// `count` accepting `to` made `send @x -> count to output` parse as
+// `send (@x -> count to output)`: the destination vanished, `send` fell back to
+// setting the act result, and nothing was printed or reported.
+func TestATransformCannotStealAnEnclosingClause(t *testing.T) {
+	eq(t, parse(t, "send @x -> count to output"), "send (@x -> count) to output")
+	eq(t, parse(t, `write @rows -> count to ./n.txt`), "write (@rows -> count) to ./n.txt")
+	// The two a transform does own still work.
+	eq(t, parse(t, "@a = @d |> filter where active"), "@a = (@d |> filter where active)")
+	eq(t, parse(t, "@a = @d |> sort by name"), "@a = (@d |> sort by name)")
+	eq(t, parse(t, "@a = @d |> group by region"), "@a = (@d |> group by region)")
 }

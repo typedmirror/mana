@@ -39,9 +39,22 @@ func Trace(r *Report) string {
 		if o.Err != nil {
 			fmt.Fprintf(&b, "  %s     reason: %s\n", cont, o.Err.Reason)
 		}
-		if len(o.Intents) > 0 {
-			// The last one is the reasoning in force when the act ended, which
-			// is the one a failure would have carried.
+		// Each `--` block, in order: the model's own segmentation of its work.
+		for _, st := range o.Steps {
+			label := st.Intent
+			if label == "" {
+				label = "(no intent given)"
+			}
+			state := "·"
+			if st.Status == "failed" {
+				state = "✗"
+			}
+			fmt.Fprintf(&b, "  %s     %s %-8s %s\n", cont, state, short(st.Duration), label)
+			for _, note := range st.Notes {
+				fmt.Fprintf(&b, "  %s        note: %s\n", cont, note)
+			}
+		}
+		if len(o.Steps) == 0 && len(o.Intents) > 0 {
 			fmt.Fprintf(&b, "  %s     intent: %q\n", cont, o.Intents[len(o.Intents)-1])
 		}
 		if len(o.Uses) > 0 {

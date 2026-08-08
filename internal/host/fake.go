@@ -5,6 +5,7 @@ import (
 	"io"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/typedmirror/mana/internal/object"
 )
@@ -20,6 +21,7 @@ type Fake struct {
 	Mods      map[string]Module // registry, shared by tools and modules alike
 	Ctx       Context
 
+	Ran     []Ran     // every shell command, in order
 	Written []Written // every WriteFile, in order
 	Posted  []Posted  // every Post, in order
 	Asked   []string  // every prompt, in order
@@ -28,6 +30,11 @@ type Fake struct {
 }
 
 type Written struct{ Path, Content string }
+
+type Ran struct {
+	Command string
+	Timeout time.Duration
+}
 
 type Posted struct{ URL, Body string }
 
@@ -87,7 +94,8 @@ func (h *Fake) WriteFile(path, content string) error {
 	return nil
 }
 
-func (h *Fake) Run(command string) (Shell, error) {
+func (h *Fake) Run(command string, timeout time.Duration) (Shell, error) {
+	h.Ran = append(h.Ran, Ran{Command: command, Timeout: timeout})
 	out, ok := h.Shells[command]
 	if !ok {
 		return Shell{Code: 127, Stderr: "command not found"}, nil

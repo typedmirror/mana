@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/typedmirror/mana/internal/ast"
 	"github.com/typedmirror/mana/internal/host"
@@ -43,7 +44,18 @@ type Evaluator struct {
 	results   Results
 	result    object.Value
 	resultSet bool
+
+	// Step recording. The `--` line is the boundary (see step.go).
+	steps     []Step
+	step      *Step
+	stepStart time.Time
+
+	// timeout bounds a single `run`. Zero means the host's default.
+	timeout time.Duration
 }
+
+// SetTimeout bounds each shell command this evaluator runs.
+func (e *Evaluator) SetTimeout(d time.Duration) { e.timeout = d }
 
 // Results is read access to other acts' results. The concrete table is
 // synchronized and lives with the scheduler; the evaluator only reads.
@@ -190,6 +202,7 @@ func (e *Evaluator) evalStatement(node ast.Statement, sc *scope) object.Value {
 	switch s := node.(type) {
 	case *ast.IntentStatement:
 		e.intents = append(e.intents, s.Text)
+		e.beginStep(s.Text, s.Line())
 		if e.OnIntent != nil {
 			e.OnIntent(s.Text)
 		}
@@ -227,6 +240,7 @@ func (e *Evaluator) fail(node ast.Node, format string, args ...any) *object.Err 
 	if n := len(e.intents); n > 0 {
 		err.Intent = e.intents[n-1]
 	}
+	e.failStep(err)
 	return err
 }
 
@@ -242,6 +256,7 @@ func (e *Evaluator) adopt(node ast.Node, err *object.Err) *object.Err {
 	if err.Intent == "" && len(e.intents) > 0 {
 		err.Intent = e.intents[len(e.intents)-1]
 	}
+	e.failStep(err)
 	return err
 }
 
