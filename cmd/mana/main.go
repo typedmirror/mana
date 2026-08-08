@@ -12,9 +12,14 @@ import (
 	"github.com/typedmirror/mana/internal/repl"
 )
 
-// Version is the release string. Set at build time with
-// -ldflags "-X main.Version=…"; the default is what a `go build` reports.
-var Version = "0.1.0-dev"
+// Version is the release string, tracking the language specification it
+// implements rather than counting its own releases: an interpreter for spec
+// v0.2 is more useful to know than that this is its third build.
+//
+// `make build` stamps it from the git tag; a plain `go build` reports the
+// constant below with a -dev suffix, so an unstamped binary never claims to be
+// a release.
+var Version = "0.2.0-dev"
 
 const usage = `mana — an interpreted intent script for LLM agents
 

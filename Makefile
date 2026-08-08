@@ -1,11 +1,15 @@
-BINARY := mana
-PKG    := ./...
-COVDIR := .coverdata
+BINARY  := mana
+PKG     := ./...
+COVDIR  := .coverdata
+# Stamp the binary from the tag. Falls back to the source default when the tree
+# has no tag, so a build from a working copy cannot claim to be a release.
+VERSION := $(shell git describe --tags --always --dirty 2>/dev/null)
+LDFLAGS := $(if $(VERSION),-X main.Version=$(VERSION),)
 
 .PHONY: build run test cover examples lint fmt tidy clean
 
 build:
-	go build -o bin/$(BINARY) ./cmd/$(BINARY)
+	go build -ldflags "$(LDFLAGS)" -o bin/$(BINARY) ./cmd/$(BINARY)
 
 run:
 	go run ./cmd/$(BINARY)
