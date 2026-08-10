@@ -582,3 +582,27 @@ act "two" {
 		t.Errorf("got %v", got)
 	}
 }
+
+// Acts with no edges run on concurrent goroutines against one shared host, so
+// the Fake's recorders are written concurrently — exactly what a fan-out of
+// module-using acts does. The race detector is the assertion here.
+func TestConcurrentActsShareTheFakeSafely(t *testing.T) {
+	h := host.NewFake()
+	h.Shells["echo one"] = host.Shell{Stdout: "one\n"}
+	h.Shells["echo two"] = host.Shell{Stdout: "two\n"}
+	r, _ := run(t, h, `act "one" {
+    @a = run echo one
+    send @a
+}
+
+act "two" {
+    @b = run echo two
+    send @b
+}`)
+	if !r.OK() {
+		t.Fatalf("job failed: %v", order(r))
+	}
+	if len(h.Ran) != 2 {
+		t.Errorf("recorded %d commands, want 2", len(h.Ran))
+	}
+}

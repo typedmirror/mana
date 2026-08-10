@@ -1,0 +1,31 @@
+-- a review panel: three subagents consult concurrently, a fourth act rules
+-- deterministic demo: MANA_CLAUDE_CMD=tests/claude_stub.sh mana examples/panel.mana
+-- with a real claude CLI on PATH, drop the override and the panel is live
+
+act "correctness" {
+    use claude
+    -- does the change hold together logically?
+    @v = claude "review this diff for correctness" as json
+    send @v
+}
+
+act "security" {
+    use claude
+    -- can anything in it be turned against us?
+    @v = claude "review this diff for security" as json
+    send @v
+}
+
+act "clarity" {
+    use claude
+    -- would a stranger understand it?
+    @v = claude "review this diff for clarity" as json
+    send @v
+}
+
+act "verdict" depends on "correctness", "security", "clarity" {
+    -- the panel has spoken; count the objections
+    @votes = [act.correctness.result, act.security.result, act.clarity.result]
+    @objections = @votes |> filter where verdict is "fail"
+    send { votes: @votes -> count, objections: @objections -> count, notes: @objections |> map note } to output
+}

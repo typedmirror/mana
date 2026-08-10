@@ -1,0 +1,13 @@
+-- a refusing subagent fails its act; the dependent is skipped, not passed
+-- run with MANA_CLAUDE_CMD=tests/claude_stub.sh; the stub refuses on cue
+
+act "consult" {
+    use claude
+    -- asking the oracle, which will refuse
+    @answer = claude "please refuse this request"
+    send @answer
+}
+
+act "publish" depends on "consult" {
+    send "should never appear" to output
+}

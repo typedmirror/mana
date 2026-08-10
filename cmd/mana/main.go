@@ -77,6 +77,9 @@ func run(args []string) int {
 	}
 
 	h := host.NewReal(os.Stdout, os.Stderr, os.Stdin)
+	// The binary decides what the environment provides (D-046). A script still
+	// reaches a module only through `use`, per act.
+	h.Register(host.NewClaude())
 	rest := fs_.Args()
 	if len(rest) == 0 {
 		if *tokens {

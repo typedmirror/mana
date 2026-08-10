@@ -198,27 +198,51 @@ attached:
   suggestion: "valid clauses for slack: [where, with, from, to, as, at, by, channel]" }
 ```
 
-The real host binds no modules yet, deliberately: a script asking for one gets
-an honest empty list rather than a plausible-looking one.
+The binary binds one module: `claude`. An act that uses it delegates to a
+model — prompt in, answer out, through the claude CLI. The caller's `--` line
+rides into the subagent as system-prompt context, so a delegated model knows
+*why* it was consulted. The subagent gets no tools: its answer is data, never
+effects.
+
+```
+act "correctness" {
+    use claude
+    -- does the change hold together logically?
+    @v = claude "review this diff for correctness" as json
+    send @v
+}
+```
+
+Three such acts with no edges between them are three concurrent subagents, and
+`depends on` joins them — the act graph was already an orchestrator; now the
+workers can be models. `examples/panel.mana` is the whole shape in thirty
+lines. `MANA_CLAUDE_CMD` points the module at a stub executable for a
+deterministic run, which is how the test suite exercises the full pathway
+without ever invoking the live CLI. `as json` parses the reply with the same
+machinery `read` uses — a subagent that answers prose where JSON was asked for
+is a hard error, not a string that dies three stages later.
+
+A host that binds nothing still answers honestly: a script asking for modules
+gets an empty list rather than a plausible-looking one.
 
 ---
 
 ## Status
 
-**Language v0.2 is implemented**, except the MCP bridge. 266 test cases,
-race-clean, zero dependencies, ~9.7k lines.
+**Language v0.2 is implemented**, except the MCP bridge. 285 test cases,
+race-clean, zero dependencies, ~10.3k lines.
 
 | package | | package | |
 |---|---|---|---|
 | token | 100% | parser | 90.5% |
 | lexer | 95.9% | act | 89.9% |
 | repl | 95.5% | object | 79.4% |
-| evaluator | 91.7% | host | 60.4% |
+| evaluator | 91.7% | host | 79.1% |
 
-`host` is low because the uncovered part is the real network, shell, and
-filesystem — the part that cannot be unit-tested is exactly the part that isn't.
-A fake host sits beside it, and `tests/` runs scripts against the real one so the
-two cannot drift.
+`host`'s uncovered remainder is the real network, shell, and filesystem — the
+part that cannot be unit-tested is exactly the part that isn't. A fake host
+sits beside it, and `tests/` runs scripts against the real one so the two
+cannot drift.
 
 **Not built, on purpose:**
 

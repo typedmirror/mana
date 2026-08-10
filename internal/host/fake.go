@@ -5,6 +5,7 @@ import (
 	"io"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/typedmirror/mana/internal/object"
@@ -13,6 +14,11 @@ import (
 // Fake is a scripted Host for tests. Every effect is recorded rather than
 // caused, so a test can assert on what a script *did*, not only on what it
 // returned — which is the half of a verb that matters.
+//
+// Acts with no edges between them run on concurrent goroutines against one
+// shared host, so every method that touches shared state takes the mutex.
+// Reads of the recorder fields are safe once the run has returned — the
+// scheduler joins its goroutines before handing back the report.
 type Fake struct {
 	Responses map[string]string // url -> body
 	Files     map[string]string // path -> contents
@@ -27,6 +33,8 @@ type Fake struct {
 	Asked   []string  // every prompt, in order
 	Stdout  strings.Builder
 	Stderr  strings.Builder
+
+	mu sync.Mutex
 }
 
 type Written struct{ Path, Content string }
@@ -58,13 +66,27 @@ func NewFake() *Fake {
 	}
 }
 
-func (h *Fake) Out() io.Writer { return &h.Stdout }
+// lockedWriter serializes writes from concurrent acts into one builder.
+type lockedWriter struct {
+	mu *sync.Mutex
+	w  io.Writer
+}
 
-func (h *Fake) Err() io.Writer { return &h.Stderr }
+func (l lockedWriter) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.w.Write(p)
+}
+
+func (h *Fake) Out() io.Writer { return lockedWriter{mu: &h.mu, w: &h.Stdout} }
+
+func (h *Fake) Err() io.Writer { return lockedWriter{mu: &h.mu, w: &h.Stderr} }
 
 func (h *Fake) Context() Context { return h.Ctx }
 
 func (h *Fake) Fetch(url string) (string, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
 	body, ok := h.Responses[url]
 	if !ok {
 		return "", fmt.Errorf("connection refused")
@@ -73,6 +95,8 @@ func (h *Fake) Fetch(url string) (string, error) {
 }
 
 func (h *Fake) Post(url, body string) (string, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
 	if _, ok := h.Responses[url]; !ok {
 		return "", fmt.Errorf("connection refused")
 	}
@@ -81,6 +105,8 @@ func (h *Fake) Post(url, body string) (string, error) {
 }
 
 func (h *Fake) ReadFile(path string) (string, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
 	body, ok := h.Files[path]
 	if !ok {
 		return "", fmt.Errorf("no such file: %s", path)
@@ -89,12 +115,16 @@ func (h *Fake) ReadFile(path string) (string, error) {
 }
 
 func (h *Fake) WriteFile(path, content string) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
 	h.Written = append(h.Written, Written{Path: path, Content: content})
 	h.Files[path] = content
 	return nil
 }
 
 func (h *Fake) Run(command string, timeout time.Duration) (Shell, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
 	h.Ran = append(h.Ran, Ran{Command: command, Timeout: timeout})
 	out, ok := h.Shells[command]
 	if !ok {
@@ -104,6 +134,8 @@ func (h *Fake) Run(command string, timeout time.Duration) (Shell, error) {
 }
 
 func (h *Fake) Ask(prompt string) (string, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
 	h.Asked = append(h.Asked, prompt)
 	if len(h.Answers) == 0 {
 		return "", fmt.Errorf("no answer available on stdin")

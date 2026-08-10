@@ -53,6 +53,10 @@ examples: build
 		./bin/$(BINARY) $$s.mana >/dev/null 2>&1; \
 		test $$? -eq 1 && echo "$$s.mana exited 1, as intended" || exit 1; \
 	done
+	@MANA_CLAUDE_CMD=tests/claude_stub.sh ./bin/$(BINARY) examples/panel.mana | diff -q - examples/panel.expected >/dev/null \
+		&& echo "examples/panel.mana matches its golden output (subagents via stub)" || exit 1
+	@MANA_CLAUDE_CMD=tests/claude_stub.sh ./bin/$(BINARY) tests/subagent_skip.mana >/dev/null 2>&1; \
+		test $$? -eq 1 && echo "tests/subagent_skip.mana exited 1, as intended" || exit 1
 
 lint:
 	go vet $(PKG)

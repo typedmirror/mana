@@ -15,6 +15,7 @@ import (
 	"os/exec"
 	"os/user"
 	"runtime"
+	"sort"
 	"strings"
 	"syscall"
 	"time"
@@ -159,6 +160,8 @@ type Real struct {
 	Stderr io.Writer
 	Stdin  io.Reader
 	Client *http.Client
+
+	mods map[string]Module
 }
 
 // NewReal returns a Host wired to the actual machine.
@@ -297,12 +300,32 @@ func (h *Real) Ask(prompt string) (string, error) {
 	return strings.TrimSpace(scanner.Text()), nil
 }
 
-// Modules reports what this environment provides. The real host binds nothing
-// yet: a script asking for a module gets an honest empty list rather than a
-// plausible-looking one.
-func (h *Real) Modules() []string { return nil }
+// Modules reports what this environment provides, sorted so `ask tools` is
+// stable. NewReal binds nothing (D-046): the binary is what decides which
+// modules exist, so a test that constructs a Real gets an honest empty list
+// and cannot reach a network-capable module it never asked for.
+func (h *Real) Modules() []string {
+	names := make([]string, 0, len(h.mods))
+	for name := range h.mods {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
+}
 
-func (h *Real) Module(string) (Module, bool) { return nil, false }
+func (h *Real) Module(name string) (Module, bool) {
+	m, ok := h.mods[name]
+	return m, ok
+}
+
+// Register binds a module. Called before the run starts — the registry is not
+// synchronized, because acts only read it.
+func (h *Real) Register(m Module) {
+	if h.mods == nil {
+		h.mods = map[string]Module{}
+	}
+	h.mods[m.Name()] = m
+}
 
 func (h *Real) Context() Context {
 	now := time.Now().UTC()
