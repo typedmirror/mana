@@ -1,0 +1,10 @@
+-- one call through the MCP bridge, shaped on the way out
+-- deterministic demo: MANA_MCP_STUB=tests/mcp_stub.sh mana examples/bridge.mana
+-- any real MCP server works the same way: MANA_MCP_GITHUB="npx …" makes `use github`
+
+use stub
+
+-- the bridged tool answers json, so ask for it parsed
+@stats = stub lookup with { q: "regions" } as json
+
+send @stats to output

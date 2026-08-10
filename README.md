@@ -223,6 +223,14 @@ without ever invoking the live CLI. `as json` parses the reply with the same
 machinery `read` uses — a subagent that answers prose where JSON was asked for
 is a hard error, not a string that dies three stages later.
 
+**Any MCP server is a module.** `MANA_MCP_<NAME>=<command>` bridges a server
+in: it starts lazily on first use, speaks JSON-RPC on stdio, and its tools
+become targets — `github search_issues with { query: "…" } as json`. The
+caller's `--` line travels in the request's `_meta`, so the intent channel
+crosses the protocol boundary too. A hung server is killed at the deadline
+and restarts on the next call, and an unknown tool fails listing the server's
+actual vocabulary.
+
 A host that binds nothing still answers honestly: a script asking for modules
 gets an empty list rather than a plausible-looking one.
 
@@ -262,8 +270,8 @@ already do*. A step that a propagated failure stopped reads `halted`, not
 
 ## Status
 
-**Language v0.2 is implemented**, except the MCP bridge. 301 test cases,
-race-clean, zero dependencies, ~11.1k lines.
+**Language v0.2 is fully implemented.** 312 test cases, race-clean, zero
+dependencies, ~11.6k lines.
 
 | package | | package | |
 |---|---|---|---|
@@ -279,7 +287,6 @@ cannot drift.
 
 **Not built, on purpose:**
 
-- **MCP bridge** — one adapter over the module interface. Parked.
 - **Cross-invocation resume** — retry and resume *within* a run work. Resuming a
   job in a later invocation needs a staleness model, and a cache with no defined
   invalidation is a promise the runtime cannot keep. Serve sessions sidestep

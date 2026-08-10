@@ -57,6 +57,8 @@ examples: build
 		&& echo "examples/panel.mana matches its golden output (subagents via stub)" || exit 1
 	@MANA_CLAUDE_CMD=tests/claude_stub.sh ./bin/$(BINARY) tests/subagent_skip.mana >/dev/null 2>&1; \
 		test $$? -eq 1 && echo "tests/subagent_skip.mana exited 1, as intended" || exit 1
+	@MANA_MCP_STUB=tests/mcp_stub.sh ./bin/$(BINARY) examples/bridge.mana | diff -q - examples/bridge.expected >/dev/null \
+		&& echo "examples/bridge.mana matches its golden output (mcp via stub)" || exit 1
 
 lint:
 	go vet $(PKG)

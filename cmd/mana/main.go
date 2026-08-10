@@ -92,6 +92,9 @@ func run(args []string) int {
 	// The binary decides what the environment provides (D-046). A script still
 	// reaches a module only through `use`, per act.
 	h.Register(host.NewClaude())
+	for _, m := range host.MCPFromEnv() {
+		h.Register(m)
+	}
 	rest := fs_.Args()
 	if len(rest) > 0 && rest[0] == "serve" {
 		// The flag package stops at the first positional, so `mana serve
@@ -151,6 +154,9 @@ func runServe(addr string, opts serve.Options) int {
 	newHost := func() host.Host {
 		h := host.NewReal(os.Stdout, os.Stderr, strings.NewReader(""))
 		h.Register(host.NewClaude())
+		for _, m := range host.MCPFromEnv() {
+			h.Register(m)
+		}
 		return h
 	}
 	s := serve.New(newHost, opts)
