@@ -6,10 +6,13 @@ import (
 	"flag"
 	"fmt"
 	"io/fs"
+	"net/http"
 	"os"
+	"strings"
 
 	"github.com/typedmirror/mana/internal/host"
 	"github.com/typedmirror/mana/internal/repl"
+	"github.com/typedmirror/mana/internal/serve"
 )
 
 // Version is the release string, tracking the language specification it
@@ -26,6 +29,7 @@ const usage = `mana — an interpreted intent script for LLM agents
 usage:
   mana <file.mana>       execute a script
   mana                   start the REPL
+  mana serve             sessions over HTTP, loopback by default
 
 flags:
   --dry-run              report what the script would do, cause nothing
@@ -33,9 +37,16 @@ flags:
   --trace                print the execution record afterwards, on stderr
   --retry N              give a failed act N extra attempts
   --timeout D            bound each shell command (default 2m)
+  --addr A               serve address (default 127.0.0.1:7777)
   --tokens               print the token stream, intent channel included
   --help                 show this message
   --version              print the version
+
+serve:
+  a session is a persistent context window: flat scripts share bindings
+  across submissions, act scripts run as self-contained jobs. Responses are
+  the --json report; ok:false is the failure signal, HTTP status codes are
+  the transport's own. Set MANA_SERVE_TOKEN to require a bearer token.
 
 exit codes:
   0  success
@@ -64,6 +75,7 @@ func run(args []string) int {
 	retries := fs_.Int("retry", 0, "extra attempts for a failed act")
 	asJSON := fs_.Bool("json", false, "emit the run report as JSON")
 	timeout := fs_.Duration("timeout", 0, "bound on each shell command (default 2m)")
+	addr := fs_.String("addr", "127.0.0.1:7777", "address for `mana serve`")
 	if err := fs_.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			fmt.Fprint(os.Stdout, usage)
@@ -81,6 +93,19 @@ func run(args []string) int {
 	// reaches a module only through `use`, per act.
 	h.Register(host.NewClaude())
 	rest := fs_.Args()
+	if len(rest) > 0 && rest[0] == "serve" {
+		// The flag package stops at the first positional, so `mana serve
+		// --addr X` would silently drop the flag. Parse what followed the
+		// subcommand too; both orders work.
+		if err := fs_.Parse(rest[1:]); err != nil {
+			return repl.ExitParse
+		}
+		return runServe(*addr, serve.Options{
+			Token:   os.Getenv("MANA_SERVE_TOKEN"),
+			Timeout: *timeout,
+			Retries: *retries,
+		})
+	}
 	if len(rest) == 0 {
 		if *tokens {
 			fmt.Fprintln(os.Stderr, "mana: --tokens needs a script")
@@ -116,4 +141,27 @@ func run(args []string) int {
 		JSON:    *asJSON,
 		Timeout: *timeout,
 	})
+}
+
+// runServe starts the session server. Each session's host mirrors the
+// binary's own wiring (D-046) — same modules, same defaults — with output
+// captured per run and no interactive stdin: `ask` over the wire has no
+// answer channel yet, and failing honestly beats hanging a request.
+func runServe(addr string, opts serve.Options) int {
+	newHost := func() host.Host {
+		h := host.NewReal(os.Stdout, os.Stderr, strings.NewReader(""))
+		h.Register(host.NewClaude())
+		return h
+	}
+	s := serve.New(newHost, opts)
+	guard := "loopback trust"
+	if opts.Token != "" {
+		guard = "bearer token required"
+	}
+	fmt.Fprintf(os.Stderr, "mana serve listening on %s (%s)\n", addr, guard)
+	if err := http.ListenAndServe(addr, s.Handler()); err != nil {
+		fmt.Fprintf(os.Stderr, "mana serve: %v\n", err)
+		return repl.ExitRuntime
+	}
+	return repl.ExitOK
 }

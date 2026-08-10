@@ -62,6 +62,7 @@ make build          # ./bin/mana
 ```sh
 mana job.mana                 # run
 mana                          # REPL
+mana serve                    # sessions over HTTP, loopback by default
 mana --json job.mana          # one document: status, per-step outcomes, output
 mana --dry-run job.mana       # what it would do, causes nothing
 mana --trace job.mana         # execution record, on stderr
@@ -227,10 +228,42 @@ gets an empty list rather than a plausible-looking one.
 
 ---
 
+## Serve
+
+`mana serve` is the REPL's session over the wire. A session is a persistent
+context window: flat scripts share bindings across submissions, so a model can
+run one artifact, read the report, and fire the next against what the first
+one bound. Scripts with acts run as self-contained jobs; their results come
+back in the report, which is the carry channel.
+
+```
+POST /sessions              → { "session": "…" }
+POST /sessions/{id}/run     ← script body   → the report
+GET  /sessions/{id}         → { "bindings": [...], "runs": N }
+DELETE /sessions/{id}
+POST /run                   one-shot, no session
+```
+
+The HTTP layer is not the error channel: a runtime failure returns 200 with
+`ok:false` — the failure is a well-formed answer carrying intent and
+suggestion, exactly as exit 1 is at the CLI. Status codes are the transport's
+own: 422 parse errors, 404 unknown session, 401 bad token. Loopback by
+default; set `MANA_SERVE_TOKEN` to require a bearer token.
+
+The report itself is designed for its actual reader — a model deciding its
+next move: `ok`, then `output`, then `failures` (each one once, with the
+intent that preceded it and a suggestion), then `skipped`, then per-act steps.
+Steps carry their `effects` — the calls that changed something outside the
+process — because the first question after a partial failure is *what did it
+already do*. A step that a propagated failure stopped reads `halted`, not
+`ok`: a step that never accomplished its intent is not a pass.
+
+---
+
 ## Status
 
-**Language v0.2 is implemented**, except the MCP bridge. 285 test cases,
-race-clean, zero dependencies, ~10.3k lines.
+**Language v0.2 is implemented**, except the MCP bridge. 301 test cases,
+race-clean, zero dependencies, ~11.1k lines.
 
 | package | | package | |
 |---|---|---|---|
@@ -249,9 +282,9 @@ cannot drift.
 - **MCP bridge** — one adapter over the module interface. Parked.
 - **Cross-invocation resume** — retry and resume *within* a run work. Resuming a
   job in a later invocation needs a staleness model, and a cache with no defined
-  invalidation is a promise the runtime cannot keep.
-- **`mana serve`** — needs decisions nobody has made: what it exposes, how a job
-  is addressed, what authenticates a caller.
+  invalidation is a promise the runtime cannot keep. Serve sessions sidestep
+  this deliberately: session state is in-memory and dies with the process,
+  which is a lifetime, not a cache.
 - **`mana test`** — `test`/`mock`/`assert` are deliberately not language
   syntax, so there is nothing for it to run. Acts are tested from Go against a
   fake host.

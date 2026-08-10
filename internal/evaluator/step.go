@@ -19,11 +19,19 @@ const hostDefaultTimeout = host.DefaultTimeout
 // block is what turns a script that returns one pass/fail into one that returns
 // an outcome per step the model actually intended.
 type Step struct {
-	Intent   string
-	Line     int
-	Status   string // "ok" or "failed"
-	Err      *object.Err
-	Notes    []string // observations worth keeping that are not the value
+	Intent string
+	Line   int
+	// Status is "ok", "failed" (this step created the failure), or "halted" —
+	// a failure created earlier reached a bare statement here and stopped the
+	// run. Halted is not ok: the step never accomplished its stated intent.
+	Status string
+	Err    *object.Err
+	Notes  []string // observations worth keeping that are not the value
+	// Effects are the calls that changed something outside the process — shell
+	// commands, writes, sends that leave, module invocations. The first
+	// question after a partial failure is "what did it already do", and reads
+	// are excluded because they leave no wreckage (D-048).
+	Effects  []string
 	Duration time.Duration
 }
 
@@ -65,6 +73,20 @@ func (e *Evaluator) note(format string, args ...any) {
 		e.beginStep("", 0)
 	}
 	e.step.Notes = append(e.step.Notes, fmt.Sprintf(format, args...))
+}
+
+// effect records a call that is about to change something outside the process,
+// under the step whose reasoning fired it. Recorded at the attempt, not the
+// success: a mutation that failed halfway is still wreckage.
+func (e *Evaluator) effect(format string, args ...any) {
+	if e.step == nil {
+		e.beginStep("", 0)
+	}
+	s := fmt.Sprintf(format, args...)
+	if len(s) > 120 {
+		s = s[:120] + "…"
+	}
+	e.step.Effects = append(e.step.Effects, s)
 }
 
 // Steps returns the blocks this evaluator ran, in order.

@@ -285,13 +285,13 @@ func TestJSONCarriesAFailureAndExitsNonZero(t *testing.T) {
 		t.Fatalf("got exit %d", code)
 	}
 	var doc struct {
-		OK   bool `json:"ok"`
+		OK       bool `json:"ok"`
+		Failures []struct {
+			Intent string `json:"intent"`
+			Reason string `json:"reason"`
+		} `json:"failures"`
 		Acts []struct {
 			Status string `json:"status"`
-			Error  struct {
-				Intent string `json:"intent"`
-				Reason string `json:"reason"`
-			} `json:"error"`
 		} `json:"acts"`
 	}
 	if err := json.Unmarshal([]byte(h.Stdout.String()), &doc); err != nil {
@@ -300,8 +300,69 @@ func TestJSONCarriesAFailureAndExitsNonZero(t *testing.T) {
 	if doc.OK {
 		t.Error("ok should be false")
 	}
-	if doc.Acts[0].Error.Intent != "reaching for a file that is not there" {
-		t.Errorf("the intent must survive into the machine-readable report: %+v", doc.Acts[0].Error)
+	if len(doc.Failures) != 1 || doc.Failures[0].Intent != "reaching for a file that is not there" {
+		t.Errorf("the intent must survive into the triage list: %+v", doc.Failures)
+	}
+	if doc.Acts[0].Status != "failed" {
+		t.Errorf("act status: %+v", doc.Acts)
+	}
+	// One failure, one place (D-048): the acts and steps carry status only.
+	if n := strings.Count(h.Stdout.String(), `"reason"`); n != 1 {
+		t.Errorf("the failure appears %d times, want exactly 1:\n%s", n, h.Stdout.String())
+	}
+}
+
+// TestJSONMarksTheHaltedStep: a failure bound in one step stops the run in a
+// later step. The later step never accomplished its intent, so reporting it
+// "ok" would be a lie; it halted (D-048).
+func TestJSONMarksTheHaltedStep(t *testing.T) {
+	h := host.NewFake()
+	code := RunWith("-- the step that creates the failure\n@c = read ./absent.json\n\n-- the step the failure stops\nsend @c to output", h, Options{JSON: true})
+	if code != ExitRuntime {
+		t.Fatalf("got exit %d", code)
+	}
+	var doc struct {
+		Acts []struct {
+			Steps []struct {
+				Intent string `json:"intent"`
+				Status string `json:"status"`
+			} `json:"steps"`
+		} `json:"acts"`
+	}
+	if err := json.Unmarshal([]byte(h.Stdout.String()), &doc); err != nil {
+		t.Fatalf("%v\n%s", err, h.Stdout.String())
+	}
+	steps := doc.Acts[0].Steps
+	if len(steps) != 2 {
+		t.Fatalf("got %+v", steps)
+	}
+	if steps[0].Status != "failed" || steps[1].Status != "halted" {
+		t.Errorf("want failed then halted, got %q then %q", steps[0].Status, steps[1].Status)
+	}
+}
+
+// TestJSONRecordsEffects: the report says what actually fired, under the step
+// whose reasoning fired it — the first question after a partial failure.
+func TestJSONRecordsEffects(t *testing.T) {
+	h := host.NewFake()
+	h.Shells["touch a"] = host.Shell{Stdout: ""}
+	code := RunWith("-- mutate, then fail\n@a = run touch a\n@b = write @a to ./out.txt\n@c = read ./absent.json\nsend @c to output", h, Options{JSON: true})
+	if code != ExitRuntime {
+		t.Fatalf("got exit %d: %s", code, h.Stdout.String())
+	}
+	var doc struct {
+		Acts []struct {
+			Steps []struct {
+				Effects []string `json:"effects"`
+			} `json:"steps"`
+		} `json:"acts"`
+	}
+	if err := json.Unmarshal([]byte(h.Stdout.String()), &doc); err != nil {
+		t.Fatalf("%v\n%s", err, h.Stdout.String())
+	}
+	effects := doc.Acts[0].Steps[0].Effects
+	if len(effects) != 2 || effects[0] != "run: touch a" || effects[1] != "write: ./out.txt" {
+		t.Errorf("effects: %v", effects)
 	}
 }
 

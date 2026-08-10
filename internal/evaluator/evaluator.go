@@ -105,6 +105,17 @@ func (e *Evaluator) Uses() []string {
 // the stack is a product feature, not an implementation detail.
 func (e *Evaluator) Intents() []string { return e.intents }
 
+// Bindings lists the names currently bound, sorted. A serve session reports
+// them so a caller can see what its context window holds (D-049).
+func (e *Evaluator) Bindings() []string {
+	names := make([]string, 0, len(e.binds))
+	for name := range e.binds {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
+}
+
 // scope holds bare-identifier bindings. Only two things create one: a match arm
 // binder and an element-wise transform. Axiom 3 says the LLM does not manage
 // resources, so there are no scoping variants beyond these.
@@ -181,10 +192,28 @@ func (e *Evaluator) runStatements(stmts []ast.Statement, sc *scope) object.Value
 			continue
 		}
 		if object.IsErr(last) {
+			// If this step still reads ok, the failure was created in an
+			// earlier step and only reached a bare statement here. That is not
+			// ok — the step never accomplished its intent — and it is not this
+			// step's failure either. It halted (D-048).
+			if e.step != nil && e.step.Status == "ok" {
+				e.step.Status = "halted"
+			}
 			return last
 		}
 	}
 	return last
+}
+
+// BeginRun resets per-run recording — steps, intents, uses — while keeping
+// bindings. A serve session runs many scripts on one evaluator (D-049): the
+// bindings are the session, but each run's report describes that run alone.
+func (e *Evaluator) BeginRun() {
+	e.closeStep()
+	e.steps = nil
+	e.intents = nil
+	e.uses = map[string]bool{}
+	e.result, e.resultSet = nil, false
 }
 
 // unhandled returns the first bound failure that nothing took responsibility
@@ -577,6 +606,7 @@ func (e *Evaluator) evalModuleCall(n *ast.ModuleCall, sc *scope, piped object.Va
 		}
 		call.Clauses[c.Name()] = v
 	}
+	e.effect("%s", moduleEffect(n.Module, call))
 	out := m.Execute(call)
 	if out == nil {
 		return e.fail(n, "module %q returned nothing", n.Module)
@@ -585,6 +615,23 @@ func (e *Evaluator) evalModuleCall(n *ast.ModuleCall, sc *scope, piped object.Va
 		return e.adopt(n, bad)
 	}
 	return out
+}
+
+// moduleEffect labels a module invocation for the effects ledger: the module,
+// the target if any, and the head of the first textual argument — enough to
+// know what was asked of the outside world without replaying the whole call.
+func moduleEffect(module string, call host.Call) string {
+	s := module
+	if call.Target != "" {
+		s += " " + call.Target
+	}
+	for _, a := range call.Args {
+		if str, ok := a.(object.String); ok {
+			s += ": " + string(str)
+			break
+		}
+	}
+	return s
 }
 
 // checkClause validates a clause keyword against the module's declared set.

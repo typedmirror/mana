@@ -202,6 +202,7 @@ func (e *Evaluator) verbRun(n *ast.Verb, sc *scope) object.Value {
 	if n.Shell == "" {
 		return e.runTool(n, sc)
 	}
+	e.effect("run: %s", n.Shell)
 	out, err := e.host.Run(n.Shell, e.timeout)
 	if err != nil {
 		return e.adopt(n, &object.Err{Reason: err.Error()})
@@ -263,6 +264,7 @@ func (e *Evaluator) runTool(n *ast.Verb, sc *scope) object.Value {
 	} else if _, isNull := args.(object.Null); !isNull {
 		call.Args = append(call.Args, args)
 	}
+	e.effect("tool %s", name)
 	out := m.Execute(call)
 	if out == nil {
 		return e.fail(n, "module %q returned nothing", name)
@@ -308,6 +310,7 @@ func (e *Evaluator) verbCreate(n *ast.Verb, sc *scope) object.Value {
 	if object.IsErr(content) {
 		return content
 	}
+	e.effect("create file: %s", path)
 	if err := e.host.WriteFile(path, object.Text(content)); err != nil {
 		return e.adopt(n, &object.Err{Reason: err.Error()})
 	}
@@ -361,6 +364,7 @@ func (e *Evaluator) verbWrite(n *ast.Verb, sc *scope, piped object.Value) object
 	if ferr != nil {
 		return e.adopt(n, ferr)
 	}
+	e.effect("write: %s", path)
 	if err := e.host.WriteFile(path, body); err != nil {
 		return e.adopt(n, &object.Err{Reason: err.Error()})
 	}
@@ -421,6 +425,7 @@ func (e *Evaluator) verbSend(n *ast.Verb, sc *scope, piped object.Value) object.
 		// hands the value to it, with the module's own clauses attached.
 		return e.sendToModule(n, dest, data, sc)
 	case strings.HasPrefix(dest, "http://"), strings.HasPrefix(dest, "https://"):
+		e.effect("send to %s", dest)
 		body, err := e.host.Post(dest, object.JSON(data))
 		if err != nil {
 			return e.adopt(n, &object.Err{Reason: err.Error()})
@@ -464,6 +469,7 @@ func (e *Evaluator) sendToModule(n *ast.Verb, name string, data object.Value, sc
 		}
 		call.Clauses[c.Name()] = v
 	}
+	e.effect("send to module %s", name)
 	out := m.Execute(call)
 	if out == nil {
 		return object.Null{}
