@@ -68,6 +68,9 @@ type session struct {
 	out  *swappable
 	base host.Host
 	runs int
+	// prior is the last act-job's successful results, for identity-based
+	// reuse (D-054). In memory only: the session's lifetime is the cache's.
+	prior *act.Prior
 }
 
 // New builds a server. newHost constructs the base host for each session and
@@ -185,7 +188,14 @@ func (s *Server) run(w http.ResponseWriter, r *http.Request) {
 	acts, _ := act.Split(prog)
 	var report *act.Report
 	if len(acts) > 0 {
-		report = act.RunWith(prog, sess.out, act.Options{Retries: s.opts.Retries, Timeout: s.opts.Timeout})
+		jobOpts := act.Options{Retries: s.opts.Retries, Timeout: s.opts.Timeout}
+		// ?fresh=1 bypasses reuse — for when the caller knows the world moved
+		// underneath an unchanged script (D-054).
+		if r.URL.Query().Get("fresh") == "" {
+			jobOpts.Prior = sess.prior
+		}
+		report = act.RunWith(prog, sess.out, jobOpts)
+		sess.prior = act.Remember(prog, report)
 	} else {
 		report = s.runFlatInSession(sess, prog)
 	}

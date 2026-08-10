@@ -262,6 +262,75 @@ func TestSessionReachesAModule(t *testing.T) {
 	}
 }
 
+// The turn-saver (D-054): a job fails partway, the caller resubmits the
+// corrected artifact, and the acts that already succeeded are reused — their
+// effects fire exactly once across both submissions.
+func TestSessionResubmissionReusesDoneWork(t *testing.T) {
+	var fakes []*host.Fake
+	s := New(func() host.Host {
+		h := host.NewFake()
+		h.Shells["provision"] = host.Shell{Stdout: "provisioned\n"}
+		h.Shells["deploy-fixed"] = host.Shell{Stdout: "deployed\n"}
+		fakes = append(fakes, h)
+		return h
+	}, Options{})
+	ts := httptest.NewServer(s.Handler())
+	t.Cleanup(ts.Close)
+
+	id := mkSession(t, ts)
+	broken := `act "setup" {
+    @a = run provision
+    send @a
+}
+
+act "ship" depends on "setup" {
+    @b = run deploy-broken
+    send @b
+}`
+	code, doc := post(t, ts.URL+"/sessions/"+id+"/run", broken, nil)
+	if code != http.StatusOK || doc["ok"] != false {
+		t.Fatalf("first run should fail: %d %v", code, doc)
+	}
+
+	fixed := strings.Replace(broken, "deploy-broken", "deploy-fixed", 1)
+	code, doc = post(t, ts.URL+"/sessions/"+id+"/run", fixed, nil)
+	if code != http.StatusOK || doc["ok"] != true {
+		t.Fatalf("second run: %d %v", code, doc)
+	}
+	statuses := map[string]string{}
+	for _, a := range doc["acts"].([]any) {
+		rec := a.(map[string]any)
+		statuses[rec["name"].(string)] = rec["status"].(string)
+	}
+	if statuses["setup"] != "reused" || statuses["ship"] != "ok" {
+		t.Errorf("want setup reused and ship ok, got %v", statuses)
+	}
+
+	// The proof: provision ran once across both submissions.
+	h := fakes[len(fakes)-1]
+	count := 0
+	for _, r := range h.Ran {
+		if r.Command == "provision" {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Errorf("provision fired %d times across two submissions, want 1", count)
+	}
+
+	// ?fresh=1 bypasses reuse: everything runs again.
+	code, doc = post(t, ts.URL+"/sessions/"+id+"/run?fresh=1", fixed, nil)
+	if code != http.StatusOK || doc["ok"] != true {
+		t.Fatalf("fresh run: %d %v", code, doc)
+	}
+	for _, a := range doc["acts"].([]any) {
+		rec := a.(map[string]any)
+		if rec["status"] != "ok" {
+			t.Errorf("fresh must re-run everything: %v", rec)
+		}
+	}
+}
+
 // Different sessions run concurrently without sharing state; the race
 // detector is the assertion.
 func TestSessionsAreIndependentAndConcurrent(t *testing.T) {

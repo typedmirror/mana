@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/typedmirror/mana/internal/ast"
 	"github.com/typedmirror/mana/internal/host"
 	"github.com/typedmirror/mana/internal/object"
 	"github.com/typedmirror/mana/internal/parser"
@@ -580,6 +581,126 @@ act "two" {
 	}
 	if got := outcome(t, r, "two").Uses; len(got) != 1 || got[0] != "b" {
 		t.Errorf("got %v", got)
+	}
+}
+
+// --- identity-based reuse (D-054) --------------------------------------------
+
+const reuseSrc = `act "setup" {
+    @a = run provision
+    send @a
+}
+
+act "work" depends on "setup" {
+    @b = run compute
+    send act.setup.result + " " + @b
+}`
+
+func reuseHost() *host.Fake {
+	h := host.NewFake()
+	h.Shells["provision"] = host.Shell{Stdout: "provisioned\n"}
+	h.Shells["compute"] = host.Shell{Stdout: "computed\n"}
+	h.Shells["compute2"] = host.Shell{Stdout: "recomputed\n"}
+	return h
+}
+
+func parseProg(t *testing.T, src string) *ast.Program {
+	t.Helper()
+	p := parser.New(src)
+	prog := p.Parse()
+	if errs := p.Errors(); len(errs) > 0 {
+		t.Fatalf("parse errors: %v", errs)
+	}
+	return prog
+}
+
+// An unchanged script against a prior success runs nothing at all: every act
+// reuses, no effects fire, and the results are still there.
+func TestUnchangedActsAreReusedWithoutEffects(t *testing.T) {
+	h := reuseHost()
+	prog := parseProg(t, reuseSrc)
+	first := RunWith(prog, h, Options{})
+	if !first.OK() {
+		t.Fatalf("first run: %v", order(first))
+	}
+	ranAfterFirst := len(h.Ran)
+
+	second := RunWith(prog, h, Options{Prior: Remember(prog, first)})
+	if !second.OK() {
+		t.Fatalf("second run: %v", order(second))
+	}
+	for _, name := range []string{"setup", "work"} {
+		o := outcome(t, second, name)
+		if o.Status != Reused {
+			t.Errorf("%s: %s, want reused", name, o.Status)
+		}
+		if !o.HasResult {
+			t.Errorf("%s lost its result", name)
+		}
+	}
+	if len(h.Ran) != ranAfterFirst {
+		t.Errorf("reuse fired effects: %d commands, want %d", len(h.Ran), ranAfterFirst)
+	}
+}
+
+// A changed act re-runs, and so does everything downstream of it — the
+// dependency graph is the staleness model.
+func TestChangeInvalidatesDownstreamOnly(t *testing.T) {
+	h := reuseHost()
+	prog := parseProg(t, reuseSrc)
+	first := RunWith(prog, h, Options{})
+
+	changed := parseProg(t, strings.Replace(reuseSrc, "run compute", "run compute2", 1))
+	second := RunWith(changed, h, Options{Prior: Remember(prog, first)})
+	if !second.OK() {
+		t.Fatalf("second run: %v", order(second))
+	}
+	if o := outcome(t, second, "setup"); o.Status != Reused {
+		t.Errorf("setup: %s, want reused — it did not change", o.Status)
+	}
+	if o := outcome(t, second, "work"); o.Status != Succeeded {
+		t.Errorf("work: %s, want ok — its body changed", o.Status)
+	}
+	if got := outcome(t, second, "work").Result.Inspect(); got != "provisioned recomputed" {
+		t.Errorf("the reused upstream result must feed the re-run: %q", got)
+	}
+}
+
+// A changed root invalidates the whole chain, even acts whose own text is
+// identical: identity includes an unbroken line of unchanged ancestors.
+func TestChangedRootInvalidatesEverything(t *testing.T) {
+	h := reuseHost()
+	h.Shells["provision2"] = host.Shell{Stdout: "reprovisioned\n"}
+	prog := parseProg(t, reuseSrc)
+	first := RunWith(prog, h, Options{})
+
+	changed := parseProg(t, strings.Replace(reuseSrc, "run provision", "run provision2", 1))
+	second := RunWith(changed, h, Options{Prior: Remember(prog, first)})
+	if o := outcome(t, second, "work"); o.Status != Succeeded {
+		t.Errorf("work: %s, want ok — its ancestor changed", o.Status)
+	}
+}
+
+// Only success is remembered. A failed act re-runs, and its skipped
+// dependents run for the first time.
+func TestFailureIsNeverReused(t *testing.T) {
+	h := reuseHost()
+	broken := parseProg(t, strings.Replace(reuseSrc, "run compute", "run missing-cmd", 1))
+	first := RunWith(broken, h, Options{})
+	if first.OK() {
+		t.Fatal("first run should have failed")
+	}
+
+	fixed := parseProg(t, reuseSrc)
+	second := RunWith(fixed, h, Options{Prior: Remember(broken, first)})
+	if !second.OK() {
+		t.Fatalf("second run: %v", order(second))
+	}
+	if o := outcome(t, second, "setup"); o.Status != Reused {
+		t.Errorf("setup: %s, want reused", o.Status)
+	}
+	if o := outcome(t, second, "work"); o.Status != Succeeded {
+		t.Errorf("work: %s, want ok — its failure must not be reused", o.Status)
 	}
 }
 

@@ -258,6 +258,16 @@ suggestion, exactly as exit 1 is at the CLI. Status codes are the transport's
 own: 422 parse errors, 404 unknown session, 401 bad token. Loopback by
 default; set `MANA_SERVE_TOKEN` to require a bearer token.
 
+A failed job does not cost the turn. The session keeps the last job's
+successful act results, and a resubmitted artifact reuses them: an act whose
+text is unchanged, with unchanged ancestors, reports `"reused"` — result
+restored, body not run, **effects not fired again**. The dependency graph is
+the staleness model: anything changed re-runs, and everything downstream of a
+change re-runs with it. Fix the one broken act, resubmit the whole artifact,
+and only the fix executes. `?fresh=1` bypasses reuse when the world moved
+underneath an unchanged script. In memory only — the session's lifetime is
+the cache's lifetime.
+
 The report itself is designed for its actual reader — a model deciding its
 next move: `ok`, then `output`, then `failures` (each one once, with the
 intent that preceded it and a suggestion), then `skipped`, then per-act steps.
@@ -270,7 +280,7 @@ already do*. A step that a propagated failure stopped reads `halted`, not
 
 ## Status
 
-**Language v0.2 is fully implemented.** 312 test cases, race-clean, zero
+**Language v0.2 is fully implemented.** 317 test cases, race-clean, zero
 dependencies, ~11.6k lines.
 
 | package | | package | |

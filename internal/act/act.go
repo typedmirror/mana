@@ -59,6 +59,12 @@ const (
 	// deliberately not a success: nothing happened, and saying "ok" would be
 	// the silent-failure mode this language exists to remove.
 	Skipped Status = "skipped"
+
+	// Reused means the act did not run: its text and everything upstream were
+	// unchanged since it last succeeded in this session, so its result was
+	// restored and its effects were not fired again (D-054). Never reported
+	// as "ok" — a reader must be able to see what actually executed.
+	Reused Status = "reused"
 )
 
 // Outcome is one act's record: what it did, how long it took, what it was
@@ -96,15 +102,89 @@ type Options struct {
 	// because a dependency that already succeeded keeps its result (v2 §14.1,
 	// §14.2): only the failed act runs again, never the graph behind it.
 	Retries int
+
+	// Prior is the previous job's successful acts, enabling identity-based
+	// reuse (D-054). Nil means every act runs.
+	Prior *Prior
 }
 
-// OK reports whether every act succeeded.
+// Prior carries what a finished job established, for the next one to reuse.
+type Prior struct {
+	acts map[string]priorAct
+}
+
+type priorAct struct {
+	identity  string
+	result    object.Value
+	hasResult bool
+}
+
+// Remember extracts a Prior from a finished job: every act that succeeded or
+// was itself reused, keyed by name, with the exact text that earned the
+// result. The dependency graph is the staleness model — identity plus an
+// unbroken chain of unchanged ancestors is what "still true" means here.
+func Remember(prog *ast.Program, r *Report) *Prior {
+	acts, _ := Split(prog)
+	byName := map[string]*ast.Act{}
+	for _, a := range acts {
+		byName[a.Name] = a
+	}
+	p := &Prior{acts: map[string]priorAct{}}
+	for _, o := range r.Outcomes {
+		if o.Status != Succeeded && o.Status != Reused {
+			continue
+		}
+		a, ok := byName[o.Name]
+		if !ok {
+			continue
+		}
+		p.acts[o.Name] = priorAct{identity: a.String(), result: o.Result, hasResult: o.HasResult}
+	}
+	return p
+}
+
+// reusable computes which acts need not run: identical text to a prior
+// success, and every dependency itself reusable. A change anywhere re-runs
+// everything downstream of it.
+func (p *Prior) reusable(acts []*ast.Act) map[string]bool {
+	if p == nil {
+		return nil
+	}
+	ok := map[string]bool{}
+	for changed := true; changed; {
+		changed = false
+		for _, a := range acts {
+			if ok[a.Name] {
+				continue
+			}
+			prior, has := p.acts[a.Name]
+			if !has || prior.identity != a.String() {
+				continue
+			}
+			deps := true
+			for _, d := range a.Depends {
+				if !ok[d] {
+					deps = false
+					break
+				}
+			}
+			if deps {
+				ok[a.Name] = true
+				changed = true
+			}
+		}
+	}
+	return ok
+}
+
+// OK reports whether every act succeeded — running counts, and so does an
+// unchanged act whose earlier success was reused.
 func (r *Report) OK() bool {
 	if r.Err != nil {
 		return false
 	}
 	for _, o := range r.Outcomes {
-		if o.Status != Succeeded {
+		if o.Status != Succeeded && o.Status != Reused {
 			return false
 		}
 	}
@@ -195,6 +275,7 @@ func runGraph(acts []*ast.Act, h host.Host, opts Options) *Report {
 	report := &Report{}
 	done := map[string]Status{}
 	jobStart := time.Now()
+	reuse := opts.Prior.reusable(acts)
 
 	for len(done) < len(acts) {
 		ready := readyActs(acts, done)
@@ -210,6 +291,16 @@ func runGraph(acts []*ast.Act, h host.Host, opts Options) *Report {
 		for i, a := range ready {
 			if reason, blocked := blockedBy(a, done); blocked {
 				outcomes[i] = Outcome{Name: a.Name, Status: Skipped, Reason: reason, Depends: a.Depends, Started: time.Since(jobStart)}
+				continue
+			}
+			if reuse[a.Name] {
+				// Unchanged since it last succeeded, with unchanged ancestors:
+				// restore the result, fire nothing (D-054).
+				prior := opts.Prior.acts[a.Name]
+				outcomes[i] = Outcome{Name: a.Name, Status: Reused, Result: prior.result, HasResult: prior.hasResult, Depends: a.Depends}
+				if prior.hasResult {
+					table.set(a.Name, prior.result)
+				}
 				continue
 			}
 			wg.Add(1)
