@@ -7,10 +7,9 @@ coverage.*
 .DS_Store
 .coverdata/
 
-# The specs are tracked; everything else in docs/ is cross-session working
-# state and stays local, along with the harness config.
-docs/*
-!docs/spec.md
-!docs/specv2.md
+# Everything in docs/ — the specs and the cross-session working state — stays
+# local, along with the harness config. The spec-drift test skips when the
+# spec is absent, so a clean clone still passes the full gate.
+docs/
 .claude/
 CLAUDE.md

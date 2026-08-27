@@ -321,14 +321,13 @@ cannot drift.
 
 ## Specification
 
-`docs/specv2.md` is the language definition. `docs/spec.md` is v0.1, kept
-because the v0.1 interpreter is still what most of the runtime is.
-
-The specs are held to the code mechanically: every `mana` block in v0.1 is
-parsed by the test suite, and its reference program must stay embedded verbatim
-in two suites. Where the two disagreed, it was almost always the document that
-moved — the implementation had been following the spec's own examples more
-faithfully than its prose did.
+The language specification is maintained alongside the project but not in
+this repository. It is held to the code mechanically: when present at
+`docs/spec.md`, every ```mana block in it is parsed by the test suite (the
+test skips on a clean clone), and the spec's reference program stays embedded
+verbatim in two suites either way. Where spec and implementation disagreed,
+it was almost always the document that moved — the implementation had been
+following the spec's own examples more faithfully than its prose did.
 
 ---
 
