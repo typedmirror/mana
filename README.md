@@ -345,12 +345,26 @@ cannot drift.
 
 - `run` captures its whole line, so a fallback must start the next line:
   `run x` / `or read ./y.json`.
+- **`or` unwraps.** After `@x = run … or "fallback"`, the failure is consumed:
+  `@x` holds the fallback value, and a later `match` on it takes the `ok` arm.
+  Catch with `or`, or dispatch with `match` — never both on one binding.
+- **`@` stops at the shell boundary.** A `run` line is raw shell: `run echo
+  $who` sees the (unset) shell variable, never the mana binding `@who`.
+  There is currently no way to pass a binding into `run`; stage it through a
+  file, or compute in mana instead.
+- **A `--` line is a queue, not a marker.** It attaches to the *next*
+  statement, however far down — a leftover intent line at the end of an edit
+  will label whatever comes after it.
 - `send @x |> f to output` is a syntax error, not what it looks like. Write
   `@x |> f |> send to output`.
 - Module verbs resolve at statement or binding position: `@s = svc ping`, not
   `send svc ping`.
 - `a/b` unspaced lexes as a path. Write `a / b`.
 - Strings have no escape sequences.
+- `as json` is a verb clause (`read`, module calls), not a postfix: a JSON
+  string already in a binding cannot be re-parsed in-language today.
+- In a serve session, `act.x.result` does **not** become session state — act
+  jobs are self-contained, and the report is the carry channel.
 
 ---
 
