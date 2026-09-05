@@ -142,6 +142,22 @@ func TestClaudeParsesJSON(t *testing.T) {
 	}
 }
 
+// Hermes wave-2 sharp edge: a flag-shaped model value would land on argv as
+// --model's value; if the CLI's parser ever mis-read it, that is argv-shaped
+// injection. Rejected at the module boundary instead.
+func TestClaudeRejectsFlagShapedModel(t *testing.T) {
+	c := stub(t, "cat")
+	with := object.NewRecord()
+	with.Set("model", object.String("--dangerously-skip-permissions"))
+	bad := mustErr(t, c.Execute(Call{
+		Args:    []object.Value{object.String("hi")},
+		Clauses: map[string]object.Value{"with": with},
+	}))
+	if !strings.Contains(bad.Reason, "model") {
+		t.Errorf("reason: %q", bad.Reason)
+	}
+}
+
 // The full outgoing shape: argv carries the flags, the model, and the intent;
 // stdin carries the prompt with the `with` values as labelled blocks.
 func TestClaudeAssemblesTheCall(t *testing.T) {

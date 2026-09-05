@@ -89,6 +89,15 @@ func MCPFromEnv() []*MCP {
 // plausible-looking lie (D-056).
 func (m *MCP) Effects() []string { return m.effects }
 
+// SetTimeout bounds each server call. Wired from --timeout (D-059): a hung
+// server is killed at the deadline the operator actually asked for, not at
+// the host default two minutes later.
+func (m *MCP) SetTimeout(d time.Duration) {
+	if d > 0 {
+		m.timeout = d
+	}
+}
+
 func (m *MCP) Name() string { return m.name }
 
 // Clauses is nil: the built-in keywords suffice, with `with` carrying the

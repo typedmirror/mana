@@ -106,6 +106,41 @@ func TestEmptyScriptIs400(t *testing.T) {
 	}
 }
 
+// Hermes F4: the method-pattern mux answered 405 before auth ran, so an
+// unauthenticated caller could enumerate which routes exist. With a token
+// set, EVERY response — wrong methods and unknown paths included — requires
+// the bearer first.
+func TestWrongMethodStillNeedsTheToken(t *testing.T) {
+	ts := testServer(t, Options{Token: "s3cret"})
+	for _, probe := range []struct{ method, path string }{
+		{"GET", "/run"},
+		{"PUT", "/sessions"},
+		{"OPTIONS", "/run"},
+		{"GET", "/definitely-not-a-route"},
+	} {
+		req, _ := http.NewRequest(probe.method, ts.URL+probe.path, nil)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusUnauthorized {
+			t.Errorf("%s %s: %d, want 401 — nothing answers before auth", probe.method, probe.path, resp.StatusCode)
+		}
+	}
+	// With the right token, the mux's own answers come through.
+	req, _ := http.NewRequest("GET", ts.URL+"/run", nil)
+	req.Header.Set("Authorization", "Bearer s3cret")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusMethodNotAllowed {
+		t.Errorf("authorized wrong method: %d, want 405", resp.StatusCode)
+	}
+}
+
 func TestTokenGuardsEveryRoute(t *testing.T) {
 	ts := testServer(t, Options{Token: "s3cret"})
 	code, _ := post(t, ts.URL+"/run", "send 1 to output", nil)

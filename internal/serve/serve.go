@@ -94,27 +94,31 @@ type swappable struct {
 
 func (s *swappable) Out() io.Writer { return s.buf }
 
-// Handler is the surface (D-050).
+// Handler is the surface (D-050). Auth wraps the WHOLE mux, not the
+// individual handlers: the method-pattern mux answers wrong methods with 405
+// before a per-handler check could run, which let an unauthenticated caller
+// enumerate routes (hermes F4). With a token set, every response — wrong
+// methods and unknown paths included — requires the bearer first.
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
-	mux.HandleFunc("POST /run", s.auth(s.oneShot))
-	mux.HandleFunc("POST /sessions", s.auth(s.create))
-	mux.HandleFunc("POST /sessions/{id}/run", s.auth(s.run))
-	mux.HandleFunc("GET /sessions/{id}", s.auth(s.state))
-	mux.HandleFunc("DELETE /sessions/{id}", s.auth(s.remove))
-	return mux
+	mux.HandleFunc("POST /run", s.oneShot)
+	mux.HandleFunc("POST /sessions", s.create)
+	mux.HandleFunc("POST /sessions/{id}/run", s.run)
+	mux.HandleFunc("GET /sessions/{id}", s.state)
+	mux.HandleFunc("DELETE /sessions/{id}", s.remove)
+	return s.auth(mux)
 }
 
-func (s *Server) auth(next http.HandlerFunc) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
+func (s *Server) auth(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if s.opts.Token != "" {
 			if r.Header.Get("Authorization") != "Bearer "+s.opts.Token {
 				reply(w, http.StatusUnauthorized, map[string]any{"error": "missing or wrong bearer token"})
 				return
 			}
 		}
-		next(w, r)
-	}
+		next.ServeHTTP(w, r)
+	})
 }
 
 // oneShot runs a script with no session: an ephemeral context window.

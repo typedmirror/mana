@@ -42,6 +42,15 @@ func NewClaude() *Claude {
 
 func (c *Claude) Name() string { return "claude" }
 
+// SetTimeout bounds each subagent call. Wired from --timeout (D-059): a
+// deadline the operator asked for bounds every outbound wait, not only the
+// shell.
+func (c *Claude) SetTimeout(d time.Duration) {
+	if d > 0 {
+		c.timeout = d
+	}
+}
+
 // Clauses is nil: the module speaks only the built-in keywords. `with` carries
 // the model choice and any context values; `as` picks the return shape.
 func (c *Claude) Clauses() []string { return nil }
@@ -72,6 +81,11 @@ func (c *Claude) Execute(call Call) object.Value {
 		return bad
 	}
 	model, prompt := c.assemble(call)
+	if strings.HasPrefix(model, "-") {
+		bad := Fail("a model name cannot begin with %q — that is a flag, not a model", "-")
+		bad.Suggestion = `write with model "opus", "sonnet", or a full model id`
+		return bad
+	}
 
 	argv := []string{
 		"-p",

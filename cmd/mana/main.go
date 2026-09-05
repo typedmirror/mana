@@ -37,7 +37,7 @@ flags:
   --json                 emit the run report as JSON, for a machine reader
   --trace                print the execution record afterwards, on stderr
   --retry N              give a failed act N extra attempts
-  --timeout D            bound each shell command (default 2m)
+  --timeout D            bound each shell command and module call (default 2m)
   --addr A               serve address (default 127.0.0.1:7777)
   --tokens               print the token stream, intent channel included
   --help                 show this message
@@ -92,9 +92,14 @@ func run(args []string) int {
 
 	h := host.NewReal(os.Stdout, os.Stderr, os.Stdin)
 	// The binary decides what the environment provides (D-046). A script still
-	// reaches a module only through `use`, per act.
-	h.Register(host.NewClaude())
+	// reaches a module only through `use`, per act. --timeout bounds the
+	// modules too (D-059): a deadline the operator asked for bounds every
+	// outbound wait, not only the shell.
+	c := host.NewClaude()
+	c.SetTimeout(*timeout)
+	h.Register(c)
 	for _, m := range host.MCPFromEnv() {
+		m.SetTimeout(*timeout)
 		h.Register(m)
 	}
 	rest := fs_.Args()
@@ -158,8 +163,11 @@ func run(args []string) int {
 func runServe(addr string, opts serve.Options) int {
 	newHost := func() host.Host {
 		h := host.NewReal(os.Stdout, os.Stderr, strings.NewReader(""))
-		h.Register(host.NewClaude())
+		c := host.NewClaude()
+		c.SetTimeout(opts.Timeout)
+		h.Register(c)
 		for _, m := range host.MCPFromEnv() {
+			m.SetTimeout(opts.Timeout)
 			h.Register(m)
 		}
 		return h
