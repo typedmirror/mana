@@ -65,6 +65,7 @@ mana                          # REPL
 mana serve                    # sessions over HTTP, loopback by default
 mana --json job.mana          # one document: status, per-step outcomes, output
 mana --dry-run job.mana       # what it would do, causes nothing
+mana --emit-envelope job.mana # per-act capability envelopes, causes nothing
 mana --trace job.mana         # execution record, on stderr
 mana --retry 2 job.mana       # give a failed act two more attempts
 mana --timeout 30s job.mana   # bound each shell command
@@ -236,6 +237,40 @@ gets an empty list rather than a plausible-looking one.
 
 ---
 
+## Capability envelopes
+
+`--emit-envelope` derives, without executing anything, what each act may
+touch: a per-act family of `{subprocess, network, fs_read, fs_write}`
+coordinates plus an effect level (`pure` | `observe` | `io`), read off the
+syntax tree the way `--dry-run` reads it. An enforcement substrate consumes
+the family and grants each act exactly its coordinate — never the job-level
+union, because an act that asked for nothing should hold nothing.
+
+The projection is honest about its limits: a raw `run` line is `"*"` on
+subprocess (the shell is a trust decision here, not a typed surface), a
+computed path is `"*"`, and every contributor that forced a `"*"` is named
+in a `top` list. Modules contribute their declared footprint —
+`Effects() []string`, or `MANA_MCP_<NAME>_EFFECTS=network,fs_read` for a
+bridged MCP server — and an undeclared module widens every axis rather than
+guessing.
+
+The other half of the contract is recovery: when an enforcement guard
+denies an effect, the refusal comes back as an ordinary mana error — intent
+attached, provenance ref preserved, catchable — so `or` can degrade the job
+under an attenuated grant instead of dying:
+
+```
+-- live if granted, cache if not
+@prices = run curl api.internal/prices
+       or read ./cache/prices.json as json
+```
+
+Reports also witness the observed half: each step's `reads` lists the paths
+and URLs it looked at, apart from `effects` (what it changed), because
+confidentiality and integrity are different questions.
+
+---
+
 ## Serve
 
 `mana serve` is the REPL's session over the wire. A session is a persistent
@@ -280,8 +315,8 @@ already do*. A step that a propagated failure stopped reads `halted`, not
 
 ## Status
 
-**Language v0.2 is fully implemented.** 317 test cases, race-clean, zero
-dependencies, ~11.6k lines.
+**Language v0.2 is fully implemented.** 331 test cases, race-clean, zero
+dependencies, ~12.1k lines.
 
 | package | | package | |
 |---|---|---|---|

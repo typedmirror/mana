@@ -90,6 +90,7 @@ func (e *Evaluator) verbFetch(n *ast.Verb, sc *scope) object.Value {
 		return e.fail(n, "fetch needs a URL, got a %s", src.Type())
 	}
 
+	e.observe("fetch: %s", url)
 	body, err := e.host.Fetch(url)
 	if err != nil {
 		return e.adopt(n, &object.Err{
@@ -158,6 +159,7 @@ func (e *Evaluator) verbRead(n *ast.Verb, sc *scope) object.Value {
 	if !ok {
 		return e.fail(n, "read needs a path, got a %s", src.Type())
 	}
+	e.observe("read: %s", path)
 	body, err := e.host.ReadFile(path)
 	if err != nil {
 		return e.adopt(n, &object.Err{

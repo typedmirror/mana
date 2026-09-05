@@ -1,0 +1,74 @@
+{
+  "acts": [
+    {
+      "name": "correctness",
+      "effect_level": "io",
+      "envelope": {
+        "subprocess": [
+          "module:claude"
+        ],
+        "network": true
+      },
+      "modules": [
+        {
+          "name": "claude",
+          "effects": [
+            "subprocess",
+            "network"
+          ],
+          "declared": true
+        }
+      ]
+    },
+    {
+      "name": "security",
+      "effect_level": "io",
+      "envelope": {
+        "subprocess": [
+          "module:claude"
+        ],
+        "network": true
+      },
+      "modules": [
+        {
+          "name": "claude",
+          "effects": [
+            "subprocess",
+            "network"
+          ],
+          "declared": true
+        }
+      ]
+    },
+    {
+      "name": "clarity",
+      "effect_level": "io",
+      "envelope": {
+        "subprocess": [
+          "module:claude"
+        ],
+        "network": true
+      },
+      "modules": [
+        {
+          "name": "claude",
+          "effects": [
+            "subprocess",
+            "network"
+          ],
+          "declared": true
+        }
+      ]
+    },
+    {
+      "name": "verdict",
+      "depends": [
+        "correctness",
+        "security",
+        "clarity"
+      ],
+      "effect_level": "pure",
+      "envelope": {}
+    }
+  ]
+}

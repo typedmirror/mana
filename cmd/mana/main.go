@@ -33,6 +33,7 @@ usage:
 
 flags:
   --dry-run              report what the script would do, cause nothing
+  --emit-envelope        print the per-act capability envelope family, cause nothing
   --json                 emit the run report as JSON, for a machine reader
   --trace                print the execution record afterwards, on stderr
   --retry N              give a failed act N extra attempts
@@ -76,6 +77,7 @@ func run(args []string) int {
 	asJSON := fs_.Bool("json", false, "emit the run report as JSON")
 	timeout := fs_.Duration("timeout", 0, "bound on each shell command (default 2m)")
 	addr := fs_.String("addr", "127.0.0.1:7777", "address for `mana serve`")
+	emitEnvelope := fs_.Bool("emit-envelope", false, "print the per-act capability envelope family, causing nothing")
 	if err := fs_.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			fmt.Fprint(os.Stdout, usage)
@@ -132,6 +134,9 @@ func run(args []string) int {
 	if *tokens {
 		repl.DumpTokens(string(src), os.Stdout)
 		return repl.ExitOK
+	}
+	if *emitEnvelope {
+		return repl.EmitEnvelope(string(src), h)
 	}
 	if *retries < 0 {
 		fmt.Fprintln(os.Stderr, "mana: --retry cannot be negative")

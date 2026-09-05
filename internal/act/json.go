@@ -76,7 +76,10 @@ type stepRecord struct {
 	Line int `json:"line,omitempty"`
 	// Effects are the calls that changed something outside the process. The
 	// first question after a partial failure is "what did it already do".
-	Effects    []string `json:"effects,omitempty"`
+	Effects []string `json:"effects,omitempty"`
+	// Reads witnesses what was observed — a separate column because
+	// confidentiality and integrity are different questions (D-057).
+	Reads      []string `json:"reads,omitempty"`
 	Notes      []string `json:"notes,omitempty"`
 	DurationMs int64    `json:"duration_ms,omitempty"`
 }
@@ -111,6 +114,7 @@ func actJSON(o Outcome) actRecord {
 			Intent:     s.Intent,
 			Status:     s.Status,
 			Effects:    s.Effects,
+			Reads:      s.Reads,
 			Notes:      s.Notes,
 			DurationMs: s.Duration.Milliseconds(),
 		}

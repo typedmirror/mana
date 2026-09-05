@@ -46,6 +46,10 @@ func (c *Claude) Name() string { return "claude" }
 // the model choice and any context values; `as` picks the return shape.
 func (c *Claude) Clauses() []string { return nil }
 
+// Effects declares the module's footprint (D-056): it spawns the CLI and the
+// CLI reaches the network. It touches no files and spawns nothing else.
+func (c *Claude) Effects() []string { return []string{"subprocess", "network"} }
+
 func (c *Claude) Execute(call Call) object.Value {
 	if call.Target != "" {
 		bad := Fail("claude takes a prompt string, not a target %q", call.Target)

@@ -30,6 +30,7 @@ type MCP struct {
 	name    string
 	command string
 	timeout time.Duration
+	effects []string // declared via MANA_MCP_<NAME>_EFFECTS; nil = undeclared (D-056)
 
 	mu     sync.Mutex // serializes calls; guards stdin, scan, errBuf, nextID, tools
 	stdin  io.WriteCloser
@@ -61,15 +62,32 @@ func MCPFromEnv() []*MCP {
 		if !ok || !strings.HasPrefix(k, "MANA_MCP_") || v == "" {
 			continue
 		}
+		// MANA_MCP_<NAME>_EFFECTS declares a footprint, not a server (D-056).
+		if strings.HasSuffix(k, "_EFFECTS") {
+			continue
+		}
 		name := strings.ToLower(strings.TrimPrefix(k, "MANA_MCP_"))
 		if name == "" {
 			continue
 		}
-		out = append(out, NewMCP(name, v))
+		m := NewMCP(name, v)
+		if decl := os.Getenv(k + "_EFFECTS"); decl != "" {
+			for _, e := range strings.Split(decl, ",") {
+				if e = strings.TrimSpace(e); e != "" {
+					m.effects = append(m.effects, e)
+				}
+			}
+		}
+		out = append(out, m)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].name < out[j].name })
 	return out
 }
+
+// Effects reports the declared footprint, or nil for undeclared — the bridge
+// cannot know what a server does downstream, and guessing would be a
+// plausible-looking lie (D-056).
+func (m *MCP) Effects() []string { return m.effects }
 
 func (m *MCP) Name() string { return m.name }
 

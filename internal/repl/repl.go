@@ -123,6 +123,26 @@ func RunWith(src string, h host.Host, opts Options) int {
 	return ExitOK
 }
 
+// EmitEnvelope prints the per-act capability envelope family (D-055),
+// causing nothing — the producer half of the harmonic seam.
+func EmitEnvelope(src string, h host.Host) int {
+	p := parser.New(src)
+	prog := p.Parse()
+	if errs := p.Errors(); len(errs) > 0 {
+		for _, e := range errs {
+			fmt.Fprintln(h.Err(), "parse error: "+e)
+		}
+		return ExitParse
+	}
+	out, err := act.Envelopes(prog, h)
+	if err != nil {
+		fmt.Fprintln(h.Err(), err.Inspect())
+		return ExitRuntime
+	}
+	fmt.Fprintln(h.Out(), string(out))
+	return ExitOK
+}
+
 // label prefixes a diagnostic with the act it came from. A flat script has no
 // name, so it gets no prefix.
 func label(name string) string {

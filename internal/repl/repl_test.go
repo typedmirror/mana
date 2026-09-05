@@ -366,6 +366,76 @@ func TestJSONRecordsEffects(t *testing.T) {
 	}
 }
 
+// TestDenialIsRecognizedAsData (D-058): a harmonic capability-guard refusal
+// arriving in a failure's reason gains recovery guidance carrying the
+// provenance ref — a denial is a programmable condition, not a dead cell.
+func TestDenialIsRecognizedAsData(t *testing.T) {
+	h := host.NewFake()
+	h.Shells["curl api.internal"] = host.Shell{
+		Code:   1,
+		Stderr: "denied by capability envelope harmonic:01ABCDEF@tip42 (network not granted)",
+	}
+	code := RunWith("-- reaching for the api under an attenuated grant\n@a = run curl api.internal\nsend @a to output", h, Options{JSON: true})
+	if code != ExitRuntime {
+		t.Fatalf("got exit %d", code)
+	}
+	out := h.Stdout.String()
+	if !strings.Contains(out, "harmonic:01ABCDEF@tip42") {
+		t.Errorf("the provenance ref must survive into the report:\n%s", out)
+	}
+	if !strings.Contains(out, "catch it with") {
+		t.Errorf("the denial must carry recovery guidance:\n%s", out)
+	}
+}
+
+// And the payoff: `or` catches a denial, so an attenuated envelope degrades
+// the job instead of killing it.
+func TestDenialDegradesWithOr(t *testing.T) {
+	h := host.NewFake()
+	h.Files["./cache.json"] = `{ "cached": true }`
+	h.Shells["curl api.internal"] = host.Shell{
+		Code:   1,
+		Stderr: "denied by capability envelope harmonic:01ABCDEF@tip42",
+	}
+	code := RunWith("-- live if granted, cache if not\n@a = run curl api.internal\n      or read ./cache.json as json\nsend @a to output", h, Options{})
+	if code != ExitOK {
+		t.Fatalf("the fallback should have carried it: exit %d\n%s", code, h.Stderr.String())
+	}
+	if !strings.Contains(h.Stdout.String(), "cached") {
+		t.Errorf("got %q", h.Stdout.String())
+	}
+}
+
+// TestReadsAreWitnessed (D-057): observed paths and URLs appear in their own
+// column, apart from wreckage.
+func TestReadsAreWitnessed(t *testing.T) {
+	h := host.NewFake()
+	h.Files["./in.json"] = `1`
+	h.Responses["https://api.example.com/x"] = `2`
+	code := RunWith("-- observing the world\n@a = read ./in.json\n@b = fetch https://api.example.com/x\nsend @a to output", h, Options{JSON: true})
+	if code != ExitOK {
+		t.Fatalf("exit %d: %s", code, h.Stdout.String())
+	}
+	var doc struct {
+		Acts []struct {
+			Steps []struct {
+				Reads   []string `json:"reads"`
+				Effects []string `json:"effects"`
+			} `json:"steps"`
+		} `json:"acts"`
+	}
+	if err := json.Unmarshal([]byte(h.Stdout.String()), &doc); err != nil {
+		t.Fatalf("%v", err)
+	}
+	reads := doc.Acts[0].Steps[0].Reads
+	if len(reads) != 2 || reads[0] != "read: ./in.json" || reads[1] != "fetch: https://api.example.com/x" {
+		t.Errorf("reads: %v", reads)
+	}
+	if len(doc.Acts[0].Steps[0].Effects) != 0 {
+		t.Errorf("reads must not appear as wreckage: %v", doc.Acts[0].Steps[0].Effects)
+	}
+}
+
 func TestTimeoutFlagReachesTheHost(t *testing.T) {
 	h := host.NewFake()
 	h.Shells["quick"] = host.Shell{Stdout: "ok"}

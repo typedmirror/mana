@@ -164,3 +164,29 @@ func TestMCPFromEnvScansAndNames(t *testing.T) {
 		t.Errorf("got %v", found)
 	}
 }
+
+// An _EFFECTS declaration is a footprint, never a server (D-056), and the
+// declared footprint reaches the module.
+func TestMCPEffectsDeclarationIsNotAServer(t *testing.T) {
+	t.Setenv("MANA_MCP_WIKI", "some-command")
+	t.Setenv("MANA_MCP_WIKI_EFFECTS", "network, fs_read")
+	mods := MCPFromEnv()
+	if len(mods) != 1 || mods[0].Name() != "wiki" {
+		t.Fatalf("the _EFFECTS key must not register a module: %v", mods)
+	}
+	eff := mods[0].Effects()
+	if len(eff) != 2 || eff[0] != "network" || eff[1] != "fs_read" {
+		t.Errorf("effects: %v", eff)
+	}
+}
+
+// Undeclared stays nil — the bridge does not guess (D-056).
+func TestMCPUndeclaredEffectsAreNil(t *testing.T) {
+	t.Setenv("MANA_MCP_PLAIN", "some-command")
+	mods := MCPFromEnv()
+	for _, m := range mods {
+		if m.Name() == "plain" && m.Effects() != nil {
+			t.Errorf("undeclared must be nil, got %v", m.Effects())
+		}
+	}
+}

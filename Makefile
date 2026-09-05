@@ -59,6 +59,8 @@ examples: build
 		test $$? -eq 1 && echo "tests/subagent_skip.mana exited 1, as intended" || exit 1
 	@MANA_MCP_STUB=tests/mcp_stub.sh ./bin/$(BINARY) examples/bridge.mana | diff -q - examples/bridge.expected >/dev/null \
 		&& echo "examples/bridge.mana matches its golden output (mcp via stub)" || exit 1
+	@./bin/$(BINARY) --emit-envelope examples/panel.mana | diff -q - examples/panel.envelope >/dev/null \
+		&& echo "examples/panel.mana envelope family matches its golden" || exit 1
 
 lint:
 	go vet $(PKG)

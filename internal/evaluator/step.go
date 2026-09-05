@@ -31,7 +31,12 @@ type Step struct {
 	// commands, writes, sends that leave, module invocations. The first
 	// question after a partial failure is "what did it already do", and reads
 	// are excluded because they leave no wreckage (D-048).
-	Effects  []string
+	Effects []string
+	// Reads witnesses what was observed — read paths and fetched URLs — in a
+	// separate column because confidentiality and integrity are different
+	// questions (D-057). An envelope that enforces fs_read deserves an
+	// exercised-side witness on that axis.
+	Reads    []string
 	Duration time.Duration
 }
 
@@ -82,11 +87,22 @@ func (e *Evaluator) effect(format string, args ...any) {
 	if e.step == nil {
 		e.beginStep("", 0)
 	}
-	s := fmt.Sprintf(format, args...)
-	if len(s) > 120 {
-		s = s[:120] + "…"
+	e.step.Effects = append(e.step.Effects, bounded(fmt.Sprintf(format, args...)))
+}
+
+// observe records a read — a path or URL the step looked at (D-057).
+func (e *Evaluator) observe(format string, args ...any) {
+	if e.step == nil {
+		e.beginStep("", 0)
 	}
-	e.step.Effects = append(e.step.Effects, s)
+	e.step.Reads = append(e.step.Reads, bounded(fmt.Sprintf(format, args...)))
+}
+
+func bounded(s string) string {
+	if len(s) > 120 {
+		return s[:120] + "…"
+	}
+	return s
 }
 
 // Steps returns the blocks this evaluator ran, in order.

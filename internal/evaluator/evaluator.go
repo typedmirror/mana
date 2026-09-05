@@ -13,6 +13,7 @@ package evaluator
 
 import (
 	"fmt"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -273,6 +274,11 @@ func (e *Evaluator) fail(node ast.Node, format string, args ...any) *object.Err 
 	return err
 }
 
+// denialRef recognizes a harmonic capability-guard refusal by its provenance
+// ref (D-058). The ref stays in the reason where the guard put it; the
+// recognition adds guidance, not structure.
+var denialRef = regexp.MustCompile(`harmonic:[A-Za-z0-9_-]+@[A-Za-z0-9_-]+`)
+
 // adopt stamps an error raised deeper down — by a host call or a helper — with
 // this node's position and the current intent.
 func (e *Evaluator) adopt(node ast.Node, err *object.Err) *object.Err {
@@ -284,6 +290,12 @@ func (e *Evaluator) adopt(node ast.Node, err *object.Err) *object.Err {
 	}
 	if err.Intent == "" && len(e.intents) > 0 {
 		err.Intent = e.intents[len(e.intents)-1]
+	}
+	if err.Suggestion == "" {
+		if ref := denialRef.FindString(err.Reason); ref != "" {
+			err.Suggestion = "the capability envelope denied this effect (" + ref +
+				"); catch it with `or` to degrade, or run under a wider grant"
+		}
 	}
 	e.failStep(err)
 	return err
