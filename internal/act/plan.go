@@ -67,6 +67,9 @@ func DryRun(prog *ast.Program, h host.Host) (*Plan, *object.Err) {
 		return &Plan{Waves: []Wave{{Acts: []PlannedAct{planOne(flat)}}}}, nil
 	}
 
+	if err := checkMixed(loose); err != nil {
+		return nil, err
+	}
 	byName, err := index(acts)
 	if err != nil {
 		return nil, err

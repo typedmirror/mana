@@ -205,3 +205,58 @@ act "b" depends on "a" { send 2 }`)
 		t.Fatalf("got %+v", err)
 	}
 }
+
+// Hermes F1: a mixed flat+act script can never run, so it must get the
+// runtime's own rejection from the emission — not a plausible-looking
+// family with the loose statements invisible.
+func TestMixedScriptEmitsTheRuntimeError(t *testing.T) {
+	prog := parseProg(t, `write "loose" to ./mixed.txt
+act "a" { send 1 }`)
+	_, err := Envelopes(prog, host.NewFake())
+	if err == nil || !strings.Contains(err.Reason, "either flat or made of acts") {
+		t.Fatalf("emission accepted an unrunnable script: %+v", err)
+	}
+}
+
+// Hermes F1, same hole in the dry run: planning a script the runtime
+// rejects describes a run that will never happen.
+func TestMixedScriptGetsNoDryRunPlan(t *testing.T) {
+	prog := parseProg(t, `@x = 1
+act "a" { send @x }`)
+	_, err := DryRun(prog, host.NewFake())
+	if err == nil || !strings.Contains(err.Reason, "either flat or made of acts") {
+		t.Fatalf("dry run accepted an unrunnable script: %+v", err)
+	}
+}
+
+// A file-level `--` line is reasoning about the job as a whole and stays
+// legal alongside acts — only effectful loose statements are the defect.
+func TestFileLevelIntentIsStillLegal(t *testing.T) {
+	acts := emit(t, nil, `-- the job as a whole
+act "a" { send 1 }`)
+	if len(acts) != 1 || acts[0].Name != "a" {
+		t.Fatalf("got %+v", acts)
+	}
+}
+
+// Hermes F2: a declaration carrying an unknown effect token cannot be
+// trusted, so it widens to ⊤ with the cause named — it must never silently
+// narrow to nothing while the module still runs.
+func TestInvalidEffectTokenWidensToTop(t *testing.T) {
+	h := host.NewFake()
+	h.Mods["stub"] = declaredModule{name: "stub", effects: []string{"netwrok"}}
+	acts := emit(t, h, `act "x" {
+    use stub
+    send 1
+}`)
+	a := one(t, acts, "x")
+	if !a.Envelope.Network || len(a.Envelope.Subprocess) == 0 || len(a.Envelope.FSRead) == 0 || len(a.Envelope.FSWrite) == 0 {
+		t.Errorf("an untrustworthy declaration must widen every axis: %+v", a.Envelope)
+	}
+	if len(a.Top) == 0 || !strings.Contains(strings.Join(a.Top, " "), "netwrok") {
+		t.Errorf("the bad token must be named in top: %v", a.Top)
+	}
+	if len(a.Modules) != 1 || len(a.Modules[0].Effects) != 1 || a.Modules[0].Effects[0] != "netwrok" {
+		t.Errorf("the declaration stays visible as given: %+v", a.Modules)
+	}
+}

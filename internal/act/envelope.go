@@ -2,6 +2,7 @@ package act
 
 import (
 	"encoding/json"
+	"fmt"
 	"sort"
 	"strings"
 
@@ -68,6 +69,9 @@ func Envelopes(prog *ast.Program, h host.Host) ([]byte, *object.Err) {
 		fam := familyJSON{Acts: []ActEnvelope{envelopeOne(flat, h)}}
 		out, _ := json.MarshalIndent(fam, "", "  ")
 		return out, nil
+	}
+	if err := checkMixed(loose); err != nil {
+		return nil, err
 	}
 	byName, err := index(acts)
 	if err != nil {
@@ -168,6 +172,7 @@ func envelopeOne(a *ast.Act, h host.Host) ActEnvelope {
 
 	// Modules contribute by grant, not by call site (D-055): a granted
 	// module is reachable even where no call is written.
+	allAxes := []string{"subprocess", "network", "fs_read", "fs_write"}
 	uses := append([]string(nil), a.Uses...)
 	sort.Strings(uses)
 	for _, name := range uses {
@@ -184,12 +189,24 @@ func envelopeOne(a *ast.Act, h host.Host) ActEnvelope {
 			}
 		}
 		if !note.Declared {
-			effects = []string{"subprocess", "network", "fs_read", "fs_write"}
+			effects = allAxes
 			top["module "+name] = true
 		}
+		// The declaration stays visible as given; the CONTRIBUTION is what
+		// gets validated. An unknown token means the declaration cannot be
+		// trusted, so it widens to ⊤ with the cause named — it must never
+		// silently narrow while the module still runs (hermes F2).
 		note.Effects = effects
-		out.Modules = append(out.Modules, note)
+		contribution := effects
 		for _, eff := range effects {
+			if !contains(allAxes, eff) {
+				top[fmt.Sprintf("module %s (unknown effect %q)", name, eff)] = true
+				contribution = allAxes
+				break
+			}
+		}
+		out.Modules = append(out.Modules, note)
+		for _, eff := range contribution {
 			mutates = true
 			switch eff {
 			case "subprocess":
@@ -201,9 +218,6 @@ func envelopeOne(a *ast.Act, h host.Host) ActEnvelope {
 			case "fs_write":
 				env.FSWrite = append(env.FSWrite, moduleMark(name, note.Declared))
 			}
-		}
-		if len(effects) == 0 {
-			mutates = false || mutates // a declared-pure module adds nothing
 		}
 	}
 
@@ -298,4 +312,13 @@ func dedupe(in []string) []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+func contains(list []string, s string) bool {
+	for _, x := range list {
+		if x == s {
+			return true
+		}
+	}
+	return false
 }

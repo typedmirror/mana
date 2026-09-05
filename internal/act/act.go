@@ -218,20 +218,32 @@ func RunWith(prog *ast.Program, h host.Host, opts Options) *Report {
 	if len(acts) == 0 {
 		return runFlat(prog, h, opts)
 	}
+	if err := checkMixed(loose); err != nil {
+		return &Report{Err: err}
+	}
+	return runGraph(acts, h, opts)
+}
+
+// checkMixed rejects a script that declares acts and also carries loose
+// effectful statements. It guards every entrance — run, dry run, and the
+// envelope emission — because a plan or an envelope for a script the runtime
+// rejects describes a job that will never happen, with the loose statements
+// invisible on top (hermes F1).
+func checkMixed(loose []ast.Statement) *object.Err {
 	for _, s := range loose {
 		switch s.(type) {
 		case *ast.IntentStatement:
 			// A file-level `--` line is reasoning about the job as a whole.
 		default:
-			return &Report{Err: &object.Err{
+			return &object.Err{
 				At:         s.String(),
 				Line:       s.Line(),
 				Reason:     "a script is either flat or made of acts, not both",
 				Suggestion: "move this statement into an act, or remove the act declarations",
-			}}
+			}
 		}
 	}
-	return runGraph(acts, h, opts)
+	return nil
 }
 
 // runFlat runs a script with no act declarations. It is an act — an unnamed one
