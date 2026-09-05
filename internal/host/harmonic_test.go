@@ -4,7 +4,9 @@ import (
 	"encoding/json"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/typedmirror/mana/internal/object"
 )
@@ -119,3 +121,31 @@ func TestHarmonicParsesTheRealContractShape(t *testing.T) {
 }
 
 func jsonUnmarshal(s string, v any) error { return json.Unmarshal([]byte(s), v) }
+
+// The parity race, pinned: concurrent acts share one host, and the old code
+// mutated the shared timeout while every call's kill-timer read it — a torn
+// duration truncated execs mid-output. Concurrent Runs with mixed timeouts
+// must all come back whole; the race detector and the JSON both assert.
+func TestHarmonicConcurrentRunsDoNotRace(t *testing.T) {
+	h := stubHarmonic(t)
+	var wg sync.WaitGroup
+	for i := 0; i < 6; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			d := time.Duration(0)
+			if i%2 == 0 {
+				d = 30 * time.Second
+			}
+			out, err := h.Run("echo wave", nil, d)
+			if err != nil {
+				t.Errorf("call %d: %v", i, err)
+				return
+			}
+			if out.Code != 0 || strings.TrimSpace(out.Stdout) != "wave" {
+				t.Errorf("call %d truncated or failed: %+v", i, out)
+			}
+		}(i)
+	}
+	wg.Wait()
+}

@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 )
@@ -28,6 +29,12 @@ type Harmonic struct {
 	kernelID string
 	stateDir string
 	timeout  time.Duration
+
+	// execMu serializes cell execs against the one kernel this host drives —
+	// the reference shim holds a per-kernel lock for the same reason: mana's
+	// wave-1 fires acts concurrently, and the host must tolerate that by
+	// serializing, not racing (parity finding, 2026-09-05).
+	execMu sync.Mutex
 }
 
 // NewHarmonic wraps a Real host so effects execute inside the given kernel.
@@ -63,9 +70,17 @@ type execResponse struct {
 	} `json:"outputs"`
 }
 
-// cell runs one generated Python cell in the kernel and returns the parsed
-// response plus the CLI's exit code — 3 is the denial channel.
+// cell runs one generated Python cell under the host's default deadline.
 func (h *Harmonic) cell(source string) (*execResponse, int, error) {
+	return h.cellWithin(source, h.timeout)
+}
+
+// cellWithin runs one generated Python cell in the kernel and returns the
+// parsed response plus the CLI's exit code — 3 is the denial channel. Execs
+// serialize on the per-kernel mutex.
+func (h *Harmonic) cellWithin(source string, deadline time.Duration) (*execResponse, int, error) {
+	h.execMu.Lock()
+	defer h.execMu.Unlock()
 	f, err := os.CreateTemp("", "mana-cell-*.py")
 	if err != nil {
 		return nil, -1, err
@@ -84,7 +99,7 @@ func (h *Harmonic) cell(source string) (*execResponse, int, error) {
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 
-	timer := time.AfterFunc(h.timeout, func() {
+	timer := time.AfterFunc(deadline, func() {
 		if cmd.Process != nil {
 			syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
 		}
@@ -134,8 +149,12 @@ func b64(s string) string { return base64.StdEncoding.EncodeToString([]byte(s)) 
 // line itself are still lifted, exactly as a POSIX shell treats leading
 // assignments. The guard fires on the Popen regardless of env.
 func (h *Harmonic) Run(command string, env map[string]string, timeout time.Duration) (Shell, error) {
+	// A local deadline, never a field write: concurrent acts share this host,
+	// and the old mutation raced every other call's kill-timer read — a torn
+	// duration fires the timer at once and truncates the exec mid-output.
+	deadline := h.timeout
 	if timeout > 0 {
-		h.timeout = timeout
+		deadline = timeout
 	}
 	if env == nil {
 		env = map[string]string{}
@@ -156,7 +175,7 @@ c = subprocess.run(argv, env=env, capture_output=True, text=True)
 print(json.dumps({"rc": c.returncode, "out": c.stdout, "err": c.stderr}))
 `, b64(command), b64(command), b64(string(envJSON)))
 
-	resp, code, err := h.cell(src)
+	resp, code, err := h.cellWithin(src, deadline)
 	if err != nil {
 		return Shell{}, err
 	}
