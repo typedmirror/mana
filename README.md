@@ -354,8 +354,14 @@ cannot drift.
 - **`@` stops at the shell boundary.** A `run` line is raw shell: `run echo
   $who` sees the shell variable, never the mana binding `@who`. Bindings
   cross as environment, on a continuation line:
-  `run echo hello-$WHO` / `with { WHO: @who }` — the record becomes
-  `WHO='…'` assignments, quoted once by the runtime, never spliced.
+  `run echo hello-$WHO` / `with { WHO: @who }` — the env crosses as data,
+  quoted once by the runtime, never spliced. **Host caveat:** same-line
+  `$KEY` expansion is a *shell* feature, so it works on the Real host
+  (exports run ahead of the line) but not under `MANA_KERNEL`, where runs
+  are argv-direct precisely so the guard sees the real command name. The
+  portable forms are commands that *read* the environment (`printenv WHO`,
+  any program using env vars) — or `sh -c '…'` where the envelope allows
+  `sh`, at the visible price that the guard then sees only `sh`.
 - **A `--` line is a queue, not a marker.** It attaches to the *next*
   statement, however far down — a leftover intent line at the end of an edit
   will label whatever comes after it.
