@@ -47,9 +47,12 @@ func (h *Harmonic) SetTimeout(d time.Duration) {
 	}
 }
 
-// execResponse is the contract's response document.
+// execResponse is the contract's response document. cell_id is deliberately
+// NOT parsed: the host never needed it, and typing a field you do not use is
+// how the parity gate caught this struct lying (cell_id is an integer in the
+// real contract; the old string field made every real response unparseable
+// while the fake — which had drifted to match the assumption — passed).
 type execResponse struct {
-	CellID  string `json:"cell_id"`
 	Status  string `json:"status"`
 	Outputs []struct {
 		Type   string `json:"type"`

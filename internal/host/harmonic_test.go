@@ -1,6 +1,7 @@
 package host
 
 import (
+	"encoding/json"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -95,3 +96,26 @@ func TestHarmonicDenialIsDataEndToEnd(t *testing.T) {
 		t.Errorf("ref lost: %q", e.Reason)
 	}
 }
+
+// The parity gate caught the fake drifting from the real contract on
+// cell_id's TYPE (integer, not string) — every real response failed to
+// parse while the stub-fed tests passed. This fixture is the real kernel's
+// shape verbatim, typed per harmonic's contract addendum: cell_id integer,
+// duration integer, status enum. If a struct field ever disagrees with it
+// again, this fails before the gate has to.
+func TestHarmonicParsesTheRealContractShape(t *testing.T) {
+	real := `{"cell_id":1,"status":"error","outputs":[{"type":"stream","name":"Stdout","text":"partial"},{"type":"error","ename":"PermissionError","evalue":"harmonic guard: subprocess denied: 'curl' [harmonic:f09dae1e@f821ef119336c53b]","traceback":["..."]}],"duration":12}`
+	var resp execResponse
+	if err := jsonUnmarshal(real, &resp); err != nil {
+		t.Fatalf("the real contract shape must parse: %v", err)
+	}
+	stdout, _, evalue := resp.pick()
+	if stdout != "partial" || !contains([]string{evalue}, evalue) || evalue == "" {
+		t.Errorf("picked wrong: stdout=%q evalue=%q", stdout, evalue)
+	}
+	if !strings.Contains(evalue, "[harmonic:f09dae1e@f821ef119336c53b]") {
+		t.Errorf("ref lost: %q", evalue)
+	}
+}
+
+func jsonUnmarshal(s string, v any) error { return json.Unmarshal([]byte(s), v) }

@@ -14,7 +14,7 @@ b64=$(sed -n '1s/.*"b64":"\([^"]*\)".*/\1/p' "$file")
 decoded=$(printf '%s' "$b64" | base64 -d 2>/dev/null)
 case "$decoded" in
   *curl*)
-    printf '{"cell_id":"c1","status":"denied","outputs":[{"type":"error","ename":"PermissionError","evalue":"harmonic guard: subprocess denied: '\''curl'\'' [harmonic:stub00@reftip0]"}]}\n'
+    printf '{"cell_id":1,"status":"denied","outputs":[{"type":"error","ename":"PermissionError","evalue":"harmonic guard: subprocess denied: '\''curl'\'' [harmonic:stub00@reftip0]"}]}\n'
     exit 3 ;;
 esac
 errf=$(mktemp)
@@ -31,6 +31,6 @@ if out:
     o.append({"type": "stream", "name": "Stdout", "text": out + "\n"})
 if err:
     o.append({"type": "stream", "name": "Stderr", "text": err})
-print(json.dumps({"cell_id": "c1", "status": "success" if rc == 0 else "error", "outputs": o}))
+print(json.dumps({"cell_id": 1, "status": "success" if rc == 0 else "error", "outputs": o}))
 PY
 [ "$rc" -eq 0 ] && exit 0 || exit 1
