@@ -90,17 +90,26 @@ func run(args []string) int {
 		return repl.ExitOK
 	}
 
-	h := host.NewReal(os.Stdout, os.Stderr, os.Stdin)
+	base := host.NewReal(os.Stdout, os.Stderr, os.Stdin)
 	// The binary decides what the environment provides (D-046). A script still
 	// reaches a module only through `use`, per act. --timeout bounds the
 	// modules too (D-059): a deadline the operator asked for bounds every
 	// outbound wait, not only the shell.
 	c := host.NewClaude()
 	c.SetTimeout(*timeout)
-	h.Register(c)
+	base.Register(c)
 	for _, m := range host.MCPFromEnv() {
 		m.SetTimeout(*timeout)
-		h.Register(m)
+		base.Register(m)
+	}
+	// MANA_KERNEL routes every effect through a guarded harmonic kernel
+	// (D-064): run in-kernel and argv-direct, read/write/fetch/post in-kernel,
+	// all axes under the guard. HARMONIC_STATE_DIR addresses the warm kernel.
+	var h host.Host = base
+	if kid := os.Getenv("MANA_KERNEL"); kid != "" {
+		hh := host.NewHarmonic(base, kid, os.Getenv("HARMONIC_STATE_DIR"))
+		hh.SetTimeout(*timeout)
+		h = hh
 	}
 	rest := fs_.Args()
 	if len(rest) > 0 && rest[0] == "serve" {

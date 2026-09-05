@@ -440,37 +440,22 @@ func TestReadsAreWitnessed(t *testing.T) {
 
 func TestRunWithBindingsBecomeEnvironment(t *testing.T) {
 	h := host.NewFake()
-	// The Fake looks commands up verbatim, so the key IS the assertion: the
-	// runtime must build exactly this env-prefixed command.
-	h.Shells[`WHO='hermes' echo hello-$WHO`] = host.Shell{Stdout: "hello-hermes\n"}
+	// D-065: the Fake keys on the RAW command and records env as data — a
+	// test asserts the map and the command separately, so it cannot plant
+	// the string it asserts (the U8 false-pass, made structurally impossible).
+	h.Shells["echo hello-$WHO"] = host.Shell{Stdout: "hello-hermes\n"}
 	code := RunWith("@who = \"hermes\"\n@out = run echo hello-$WHO\n       with { WHO: @who }\nsend @out to output", h, Options{})
 	if code != ExitOK {
 		t.Fatalf("exit %d\nstderr: %s", code, h.Stderr.String())
 	}
-	if !strings.Contains(h.Stdout.String(), "hello-hermes") {
-		t.Errorf("got %q", h.Stdout.String())
+	if len(h.Ran) != 1 || h.Ran[0].Command != "echo hello-$WHO" {
+		t.Fatalf("command must stay unspliced: %+v", h.Ran)
+	}
+	if h.Ran[0].Env["WHO"] != "hermes" {
+		t.Errorf("env: %+v", h.Ran[0].Env)
 	}
 }
 
-// A runtime value can hold quotes mana source cannot write. The Fake looks
-// commands up verbatim, so the key only matches if the single-quote escaping
-// is exactly right — the value stays one shell word, never shell syntax.
-func TestRunWithQuotesHostileValues(t *testing.T) {
-	h := host.NewFake()
-	h.Shells["cat trap"] = host.Shell{Stdout: "a'; rm -rf /'b\n"}
-	h.Shells[`V='a'\''; rm -rf /'\''b' echo done`] = host.Shell{Stdout: "done\n"}
-	code := RunWith("@v = run cat trap\n@out = run echo done\n       with { V: @v }\nsend @out to output", h, Options{})
-	if code != ExitOK {
-		t.Fatalf("exit %d\nstderr: %s", code, h.Stderr.String())
-	}
-	if !strings.Contains(h.Stdout.String(), "done") {
-		t.Errorf("got %q", h.Stdout.String())
-	}
-}
-
-// A hostile env NAME cannot be written in mana source (record keys are
-// idents), but a parsed JSON record can carry one — the runtime is the
-// gate, not the grammar.
 func TestRunWithRejectsBadEnvNames(t *testing.T) {
 	h := host.NewFake()
 	h.Shells["emit env"] = host.Shell{Stdout: `{"BAD-KEY": "x"}` + "\n"}

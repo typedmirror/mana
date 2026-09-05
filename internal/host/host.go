@@ -132,7 +132,10 @@ type Host interface {
 	Fetch(url string) (string, error)
 	ReadFile(path string) (string, error)
 	WriteFile(path, content string) error
-	Run(command string, timeout time.Duration) (Shell, error)
+	// Run executes a shell line. env crosses as DATA (D-065), never spliced
+	// into the command: each host realizes it natively — the Real host as
+	// exports ahead of the line, a kernel host as the subprocess environment.
+	Run(command string, env map[string]string, timeout time.Duration) (Shell, error)
 	Post(url, body string) (string, error)
 	Ask(prompt string) (string, error)
 
@@ -232,13 +235,28 @@ func (h *Real) WriteFile(path, content string) error {
 // `run ./server & disown` — which needs no language feature because the shell
 // already has one. Redirect its streams (`> /dev/null 2>&1`) or the pipe stays
 // open and the deadline applies after all.
-func (h *Real) Run(command string, timeout time.Duration) (Shell, error) {
+func (h *Real) Run(command string, env map[string]string, timeout time.Duration) (Shell, error) {
 	sh := os.Getenv("SHELL")
 	if sh == "" {
 		sh = "/bin/sh"
 	}
 	if timeout <= 0 {
 		timeout = DefaultTimeout
+	}
+	// Environment arrives as data and is realized as exports AHEAD of the
+	// line (D-065): the shell evaluates the line's words after the exports
+	// have run, so same-line $KEY expansion sees the values — which leading
+	// per-command assignments, correctly per POSIX, would not provide.
+	if len(env) > 0 {
+		var b strings.Builder
+		for _, k := range sortedKeys(env) {
+			b.WriteString("export ")
+			b.WriteString(k)
+			b.WriteString("='")
+			b.WriteString(strings.ReplaceAll(env[k], "'", `'\''`))
+			b.WriteString("'; ")
+		}
+		command = b.String() + command
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
@@ -359,3 +377,14 @@ func (c *Capture) Out() io.Writer { return &c.buf }
 
 // Text is everything the script sent to output.
 func (c *Capture) Text() string { return c.buf.String() }
+
+// sortedKeys keeps export order deterministic — an env realization that
+// reorders itself between runs is one nobody can golden.
+func sortedKeys(m map[string]string) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}

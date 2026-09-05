@@ -318,7 +318,7 @@ honest outcomes of trying.
 
 ## Status
 
-**Language v0.2 is fully implemented.** 346 test cases, race-clean, zero
+**Language v0.2 is fully implemented.** 354 test cases, race-clean, zero
 dependencies, ~12.1k lines.
 
 | package | | package | |

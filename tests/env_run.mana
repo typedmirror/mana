@@ -1,0 +1,6 @@
+-- the advertised form, under a real shell: same-line expansion must see the
+-- with-env (D-065) — the instrument that would have caught U8 on day one
+@who = "hermes"
+@out = run echo hello-$WHO
+       with { WHO: @who }
+send { out: @out } to output

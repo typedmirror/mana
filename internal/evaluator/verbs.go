@@ -204,21 +204,21 @@ func (e *Evaluator) verbRun(n *ast.Verb, sc *scope) object.Value {
 	if n.Shell == "" {
 		return e.runTool(n, sc)
 	}
-	command := n.Shell
+	var env map[string]string
 	if v, has := e.clauseValue(n, token.WITH, sc); has {
 		if object.IsErr(v) {
 			return v
 		}
-		prefix, bad := envPrefix(v)
+		m, bad := envMap(v)
 		if bad != nil {
 			return e.adopt(n, bad)
 		}
-		command = prefix + command
+		env = m
 		e.effect("run (env %s): %s", envKeys(v), n.Shell)
 	} else {
 		e.effect("run: %s", n.Shell)
 	}
-	out, err := e.host.Run(command, e.timeout)
+	out, err := e.host.Run(n.Shell, env, e.timeout)
 	if err != nil {
 		return e.adopt(n, &object.Err{Reason: err.Error()})
 	}
@@ -572,30 +572,27 @@ func (e *Evaluator) sendWithoutDestination(n *ast.Verb, data object.Value, sc *s
 	return e.setResult(n, data)
 }
 
-// envPrefix turns a `run … with { … }` record into `K='v' ` environment
-// assignments (D-060). Environment is the injection-safe channel: values are
-// single-quote-escaped once, here, and never spliced into shell syntax.
-func envPrefix(v object.Value) (string, *object.Err) {
+// envMap turns a `run … with { … }` record into the environment map the host
+// realizes natively (D-065). Environment crosses as data — validation lives
+// here, realization (quoting, exports, kernel env) lives with each host.
+func envMap(v object.Value) (map[string]string, *object.Err) {
 	rec, isRec := v.(*object.Record)
 	if !isRec {
 		bad := object.Errorf("run with needs a record of environment variables, got a %s", v.Type())
 		bad.Suggestion = "write with { NAME: @value, … }"
-		return "", bad
+		return nil, bad
 	}
-	var b strings.Builder
+	out := map[string]string{}
 	for _, k := range rec.Keys() {
 		if !validEnvName(k) {
 			bad := object.Errorf("%q cannot be an environment name", k)
 			bad.Suggestion = "environment names are letters, digits and underscores, not starting with a digit"
-			return "", bad
+			return nil, bad
 		}
 		val, _ := rec.Get(k)
-		b.WriteString(k)
-		b.WriteString("='")
-		b.WriteString(strings.ReplaceAll(envText(val), "'", `'\''`))
-		b.WriteString("' ")
+		out[k] = envText(val)
 	}
-	return b.String(), nil
+	return out, nil
 }
 
 // envText renders a value for the environment: strings as their text,

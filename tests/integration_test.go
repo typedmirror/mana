@@ -31,6 +31,7 @@ var scripts = []script{
 	{name: "pipe_transform", exit: repl.ExitOK},
 	{name: "match_dispatch", exit: repl.ExitOK},
 	{name: "act_graph", exit: repl.ExitOK},
+	{name: "env_run", exit: repl.ExitOK},
 	{
 		name: "act_failure",
 		exit: repl.ExitRuntime,

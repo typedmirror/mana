@@ -41,6 +41,7 @@ type Written struct{ Path, Content string }
 
 type Ran struct {
 	Command string
+	Env     map[string]string
 	Timeout time.Duration
 }
 
@@ -122,10 +123,13 @@ func (h *Fake) WriteFile(path, content string) error {
 	return nil
 }
 
-func (h *Fake) Run(command string, timeout time.Duration) (Shell, error) {
+func (h *Fake) Run(command string, env map[string]string, timeout time.Duration) (Shell, error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	h.Ran = append(h.Ran, Ran{Command: command, Timeout: timeout})
+	// env is recorded as data, never folded into the lookup key: a test must
+	// assert the map and the command separately (D-065), so it can never
+	// plant the string it asserts.
+	h.Ran = append(h.Ran, Ran{Command: command, Env: env, Timeout: timeout})
 	out, ok := h.Shells[command]
 	if !ok {
 		return Shell{Code: 127, Stderr: "command not found"}, nil
