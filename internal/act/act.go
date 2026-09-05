@@ -338,12 +338,26 @@ func runGraph(acts []*ast.Act, h host.Host, opts Options) *Report {
 func runOne(a *ast.Act, h host.Host, table *Table, opts Options, jobStart time.Time) Outcome {
 	started := time.Since(jobStart)
 	var out Outcome
+	var prior []evaluator.Step
 	for attempt := 0; attempt <= opts.Retries; attempt++ {
 		out = attemptOne(a, h, table, opts)
 		out.Attempts = attempt + 1
 		if out.Status == Succeeded {
 			break
 		}
+		if attempt < opts.Retries {
+			// This attempt failed and will be retried. Its effects FIRED —
+			// a module was called, a command ran — and a ledger that shows
+			// only the winning attempt under-counts the wreckage (hermes
+			// U11). Every attempt's steps are kept, labelled.
+			for _, s := range out.Steps {
+				s.Intent = fmt.Sprintf("attempt %d failed · %s", attempt+1, s.Intent)
+				prior = append(prior, s)
+			}
+		}
+	}
+	if len(prior) > 0 {
+		out.Steps = append(prior, out.Steps...)
 	}
 	out.Started = started
 	out.Duration = time.Since(jobStart) - started

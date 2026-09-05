@@ -171,15 +171,23 @@ func run(args []string) int {
 // answer channel yet, and failing honestly beats hanging a request.
 func runServe(addr string, opts serve.Options) int {
 	newHost := func() host.Host {
-		h := host.NewReal(os.Stdout, os.Stderr, strings.NewReader(""))
+		base := host.NewReal(os.Stdout, os.Stderr, strings.NewReader(""))
 		c := host.NewClaude()
 		c.SetTimeout(opts.Timeout)
-		h.Register(c)
+		base.Register(c)
 		for _, m := range host.MCPFromEnv() {
 			m.SetTimeout(opts.Timeout)
-			h.Register(m)
+			base.Register(m)
 		}
-		return h
+		// Serve sessions honor MANA_KERNEL like the CLI does (the gap hermes
+		// was told not to waste a probe on): each session's effects execute
+		// in-kernel when a kernel is named.
+		if kid := os.Getenv("MANA_KERNEL"); kid != "" {
+			hh := host.NewHarmonic(base, kid, os.Getenv("HARMONIC_STATE_DIR"))
+			hh.SetTimeout(opts.Timeout)
+			return hh
+		}
+		return base
 	}
 	s := serve.New(newHost, opts)
 	guard := "loopback trust"

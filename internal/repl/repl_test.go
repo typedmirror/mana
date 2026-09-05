@@ -582,3 +582,16 @@ func TestTimeoutFlagReachesTheHost(t *testing.T) {
 		t.Fatalf("got %+v", h.Ran)
 	}
 }
+
+// Hermes P1: a paste that dies inside an open block must not look like a
+// clean exit — buffered input that never ran is loss, and loss is reported.
+func TestReplReportsInputEndingInsideAnOpenBlock(t *testing.T) {
+	h := host.NewFake()
+	err := Start(strings.NewReader("@x = {\n    server: 1\n"), h)
+	if err == nil {
+		t.Fatal("EOF inside an open block returned a clean exit")
+	}
+	if !strings.Contains(h.Stderr.String(), "open block") {
+		t.Errorf("stderr: %q", h.Stderr.String())
+	}
+}

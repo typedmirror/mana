@@ -172,7 +172,17 @@ func Start(in io.Reader, h host.Host) error {
 		}
 		if !scanner.Scan() {
 			fmt.Fprintln(out)
-			return scanner.Err()
+			if err := scanner.Err(); err != nil {
+				return err
+			}
+			// A paste that dies mid-block must not look like a clean exit
+			// (hermes P1): buffered input that never closed is loss, and
+			// loss is reported, never dropped.
+			if strings.TrimSpace(buf.String()) != "" {
+				fmt.Fprintln(h.Err(), "parse error: input ended inside an open block — the buffered lines were never run")
+				return fmt.Errorf("input ended inside an open block")
+			}
+			return nil
 		}
 		buf.WriteString(scanner.Text())
 		buf.WriteString("\n")

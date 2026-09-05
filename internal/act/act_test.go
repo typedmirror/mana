@@ -23,6 +23,19 @@ func run(t *testing.T, h *host.Fake, src string) (*Report, *host.Fake) {
 	return Run(prog, h), h
 }
 
+func runWithOpts(t *testing.T, h *host.Fake, src string, opts Options) (*Report, *host.Fake) {
+	t.Helper()
+	if h == nil {
+		h = host.NewFake()
+	}
+	p := parser.New(src)
+	prog := p.Parse()
+	if errs := p.Errors(); len(errs) > 0 {
+		t.Fatalf("parse errors:\n  %s", strings.Join(errs, "\n  "))
+	}
+	return RunWith(prog, h, opts), h
+}
+
 // outcome finds one act's record by name.
 func outcome(t *testing.T, r *Report, name string) Outcome {
 	t.Helper()
@@ -725,5 +738,46 @@ act "two" {
 	}
 	if len(h.Ran) != 2 {
 		t.Errorf("recorded %d commands, want 2", len(h.Ran))
+	}
+}
+
+// Hermes U11: retried module calls FIRED, and a ledger that shows only the
+// winning attempt under-counts the wreckage. Every attempt's steps survive,
+// labelled, so effects across attempts sum to what the instruments saw.
+func TestRetriedAttemptsKeepTheirEffects(t *testing.T) {
+	h := host.NewFake()
+	calls := 0
+	h.Register("svc", func(host.Call) object.Value {
+		calls++
+		if calls < 3 {
+			return host.Fail("transient %d", calls)
+		}
+		return object.String("ok-3")
+	})
+	r, _ := runWithOpts(t, h, `act "flaky" {
+    use svc
+    -- calling the flaky service
+    @r = svc ping
+    send @r
+}`, Options{Retries: 2})
+	o := outcome(t, r, "flaky")
+	if o.Status != Succeeded || o.Attempts != 3 {
+		t.Fatalf("got %s attempts=%d", o.Status, o.Attempts)
+	}
+	fired := 0
+	labelled := 0
+	for _, s := range o.Steps {
+		for range s.Effects {
+			fired++
+		}
+		if strings.Contains(s.Intent, "attempt") && strings.Contains(s.Intent, "failed") {
+			labelled++
+		}
+	}
+	if fired != calls {
+		t.Errorf("ledger shows %d effects, instruments saw %d", fired, calls)
+	}
+	if labelled == 0 {
+		t.Error("failed attempts must be labelled in the steps")
 	}
 }

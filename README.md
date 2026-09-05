@@ -318,7 +318,7 @@ honest outcomes of trying.
 
 ## Status
 
-**Language v0.2 is fully implemented.** 354 test cases, race-clean, zero
+**Language v0.2 is fully implemented.** 358 test cases, race-clean, zero
 dependencies, ~12.1k lines.
 
 | package | | package | |
@@ -376,6 +376,12 @@ cannot drift.
   transform: `@raw |> parse` (hard error on non-JSON, like `read`).
 - In a serve session, `act.x.result` does **not** become session state — act
   jobs are self-contained, and the report is the carry channel.
+- In a file imported with `act "x" from ./f.mana`, `send … to output` only
+  emits — result-form `send <value>` is what sets the act result, exactly as
+  it would standalone.
+
+See [AGENTS.md](AGENTS.md) for the full language handbook written for a cold
+agent, every form verified against the binary.
 
 ---
 
