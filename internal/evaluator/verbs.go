@@ -204,8 +204,21 @@ func (e *Evaluator) verbRun(n *ast.Verb, sc *scope) object.Value {
 	if n.Shell == "" {
 		return e.runTool(n, sc)
 	}
-	e.effect("run: %s", n.Shell)
-	out, err := e.host.Run(n.Shell, e.timeout)
+	command := n.Shell
+	if v, has := e.clauseValue(n, token.WITH, sc); has {
+		if object.IsErr(v) {
+			return v
+		}
+		prefix, bad := envPrefix(v)
+		if bad != nil {
+			return e.adopt(n, bad)
+		}
+		command = prefix + command
+		e.effect("run (env %s): %s", envKeys(v), n.Shell)
+	} else {
+		e.effect("run: %s", n.Shell)
+	}
+	out, err := e.host.Run(command, e.timeout)
 	if err != nil {
 		return e.adopt(n, &object.Err{Reason: err.Error()})
 	}
@@ -557,4 +570,61 @@ func (e *Evaluator) sendWithoutDestination(n *ast.Verb, data object.Value, sc *s
 		return e.fail(n, "send needs a destination — `send <value> to output`")
 	}
 	return e.setResult(n, data)
+}
+
+// envPrefix turns a `run … with { … }` record into `K='v' ` environment
+// assignments (D-060). Environment is the injection-safe channel: values are
+// single-quote-escaped once, here, and never spliced into shell syntax.
+func envPrefix(v object.Value) (string, *object.Err) {
+	rec, isRec := v.(*object.Record)
+	if !isRec {
+		bad := object.Errorf("run with needs a record of environment variables, got a %s", v.Type())
+		bad.Suggestion = "write with { NAME: @value, … }"
+		return "", bad
+	}
+	var b strings.Builder
+	for _, k := range rec.Keys() {
+		if !validEnvName(k) {
+			bad := object.Errorf("%q cannot be an environment name", k)
+			bad.Suggestion = "environment names are letters, digits and underscores, not starting with a digit"
+			return "", bad
+		}
+		val, _ := rec.Get(k)
+		b.WriteString(k)
+		b.WriteString("='")
+		b.WriteString(strings.ReplaceAll(envText(val), "'", `'\''`))
+		b.WriteString("' ")
+	}
+	return b.String(), nil
+}
+
+// envText renders a value for the environment: strings as their text,
+// structures as JSON, so the shell side sees something it can parse.
+func envText(v object.Value) string {
+	switch v.(type) {
+	case object.String, object.Word, object.Number, object.Bool:
+		return object.Text(v)
+	default:
+		return object.JSON(v)
+	}
+}
+
+func envKeys(v object.Value) string {
+	rec, isRec := v.(*object.Record)
+	if !isRec {
+		return "?"
+	}
+	return strings.Join(rec.Keys(), ",")
+}
+
+func validEnvName(s string) bool {
+	if s == "" || (s[0] >= '0' && s[0] <= '9') {
+		return false
+	}
+	for _, c := range s {
+		if c != '_' && !(c >= 'a' && c <= 'z') && !(c >= 'A' && c <= 'Z') && !(c >= '0' && c <= '9') {
+			return false
+		}
+	}
+	return true
 }

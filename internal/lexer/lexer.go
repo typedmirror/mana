@@ -313,6 +313,11 @@ func (l *Lexer) breakIsSignificant() bool {
 	// only ever continue an `if`, so a break in front of either is layout.
 	case l.wordAhead("then"), l.wordAhead("else"):
 		return false
+	// A line cannot begin with a clause, so a break before `with` is layout
+	// too — which is what lets a raw `run` line take a clause at all (D-060):
+	// the line belongs to the shell, the continuation belongs to mana.
+	case l.wordAhead("with"):
+		return false
 	}
 	return true
 }

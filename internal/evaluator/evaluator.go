@@ -193,11 +193,12 @@ func (e *Evaluator) runStatements(stmts []ast.Statement, sc *scope) object.Value
 			continue
 		}
 		if object.IsErr(last) {
-			// If this step still reads ok, the failure was created in an
-			// earlier step and only reached a bare statement here. That is not
-			// ok — the step never accomplished its intent — and it is not this
-			// step's failure either. It halted (D-048).
-			if e.step != nil && e.step.Status == "ok" {
+			// If this step still reads ok (or recovered on the way here), the
+			// failure was created in an earlier step and only reached a bare
+			// statement now. That is not ok — the step never accomplished its
+			// intent — and it is not this step's failure either. It halted
+			// (D-048).
+			if e.step != nil && (e.step.Status == "ok" || e.step.Status == "recovered") {
 				e.step.Status = "halted"
 			}
 			return last
@@ -461,7 +462,17 @@ func (e *Evaluator) evalFallback(n *ast.Fallback, sc *scope) object.Value {
 		return left
 	}
 	err.Handle()
-	return e.eval(n.Right, sc)
+	right := e.eval(n.Right, sc)
+	// A step whose own failure was consumed on the way to a success is not a
+	// failed step and not an untroubled one — it recovered (D-063). Only this
+	// step's own attempt counts: catching an earlier step's bound failure
+	// leaves this step ok, and a chain where every option failed stays failed.
+	if !object.IsErr(right) && e.step != nil && e.step.Status == "failed" && e.step.Err == err {
+		e.step.Status = "recovered"
+		e.step.Err = nil
+		e.note("recovered by or: %s", err.Reason)
+	}
+	return right
 }
 
 func (e *Evaluator) evalIf(n *ast.If, sc *scope) object.Value {

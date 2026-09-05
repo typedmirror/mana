@@ -21,9 +21,12 @@ const hostDefaultTimeout = host.DefaultTimeout
 type Step struct {
 	Intent string
 	Line   int
-	// Status is "ok", "failed" (this step created the failure), or "halted" —
-	// a failure created earlier reached a bare statement here and stopped the
-	// run. Halted is not ok: the step never accomplished its stated intent.
+	// Status is one of the four honest outcomes of trying (D-048, D-063):
+	// "ok"; "failed" (this step created the failure and nothing consumed it);
+	// "recovered" (this step's own failure was consumed by `or` on the way to
+	// a success); "halted" (a failure created earlier reached a bare statement
+	// here and stopped the run). Neither halted nor failed is ok, and
+	// recovered is never reported as untroubled.
 	Status string
 	Err    *object.Err
 	Notes  []string // observations worth keeping that are not the value

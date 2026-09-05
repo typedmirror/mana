@@ -80,10 +80,10 @@ goes to stderr — so redirecting a job yields only what the job sent.
 ## The language in one page
 
 **Seven verbs**, one per I/O boundary: `fetch` `read` `run` `create` `write`
-`send` `ask`. **One binding sigil**, `@`. **Ten transforms** composed with `|>`
-and `->`: `filter` `map` `sort` `group` `take` `count` `sum` `trim` `lowercase`
-`matches`. **Clauses read by keyword, never position**: `where` `with` `from`
-`to` `as` `at` `by`.
+`send` `ask`. **One binding sigil**, `@`. **Twelve transforms** composed with
+`|>` and `->`: `filter` `map` `sort` `group` `take` `count` `sum` `trim`
+`lowercase` `matches` `parse` `lines`. **Clauses read by keyword, never
+position**: `where` `with` `from` `to` `as` `at` `by`.
 
 ```mana
 -- pull the day's numbers, falling back to yesterday's cache
@@ -309,13 +309,16 @@ intent that preceded it and a suggestion), then `skipped`, then per-act steps.
 Steps carry their `effects` — the calls that changed something outside the
 process — because the first question after a partial failure is *what did it
 already do*. A step that a propagated failure stopped reads `halted`, not
-`ok`: a step that never accomplished its intent is not a pass.
+`ok`: a step that never accomplished its intent is not a pass. A step whose
+own failure was consumed by `or` on the way to a success reads `recovered`,
+with a note naming what was consumed — the four step statuses are the four
+honest outcomes of trying.
 
 ---
 
 ## Status
 
-**Language v0.2 is fully implemented.** 331 test cases, race-clean, zero
+**Language v0.2 is fully implemented.** 346 test cases, race-clean, zero
 dependencies, ~12.1k lines.
 
 | package | | package | |
@@ -349,9 +352,10 @@ cannot drift.
   `@x` holds the fallback value, and a later `match` on it takes the `ok` arm.
   Catch with `or`, or dispatch with `match` — never both on one binding.
 - **`@` stops at the shell boundary.** A `run` line is raw shell: `run echo
-  $who` sees the (unset) shell variable, never the mana binding `@who`.
-  There is currently no way to pass a binding into `run`; stage it through a
-  file, or compute in mana instead.
+  $who` sees the shell variable, never the mana binding `@who`. Bindings
+  cross as environment, on a continuation line:
+  `run echo hello-$WHO` / `with { WHO: @who }` — the record becomes
+  `WHO='…'` assignments, quoted once by the runtime, never spliced.
 - **A `--` line is a queue, not a marker.** It attaches to the *next*
   statement, however far down — a leftover intent line at the end of an edit
   will label whatever comes after it.
@@ -361,8 +365,9 @@ cannot drift.
   `send svc ping`.
 - `a/b` unspaced lexes as a path. Write `a / b`.
 - Strings have no escape sequences.
-- `as json` is a verb clause (`read`, module calls), not a postfix: a JSON
-  string already in a binding cannot be re-parsed in-language today.
+- `as json` is a verb clause (`read`, module calls), not a postfix. A JSON
+  string already in a binding re-enters the value world with the `parse`
+  transform: `@raw |> parse` (hard error on non-JSON, like `read`).
 - In a serve session, `act.x.result` does **not** become session state — act
   jobs are self-contained, and the report is the carry channel.
 

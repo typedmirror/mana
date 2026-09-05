@@ -15,6 +15,7 @@ import (
 // can say what does exist instead of failing blankly.
 var knownTransforms = []string{
 	"filter", "map", "sort", "group", "take", "count", "sum", "trim", "lowercase", "matches",
+	"parse", "lines",
 }
 
 func (e *Evaluator) evalTransform(n *ast.Transform, input object.Value, sc *scope) object.Value {
@@ -40,6 +41,10 @@ func (e *Evaluator) evalTransform(n *ast.Transform, input object.Value, sc *scop
 		return e.transformMatches(n, input, sc)
 	case "trim", "lowercase":
 		return e.transformString(n, input)
+	case "parse":
+		return e.transformParse(n, input)
+	case "lines":
+		return e.transformLines(n, input)
 	}
 	// A transform that is not built in gets one chance to be a module verb
 	// before it is reported as unknown, so `@x -> search_web` works when the
@@ -314,4 +319,54 @@ func (e *Evaluator) transformString(n *ast.Transform, input object.Value) object
 		return out
 	}
 	return e.fail(n, "%s needs a string or a list of strings, got a %s", n.Name, input.Type())
+}
+
+// transformParse re-enters the value world (D-061): a string of JSON becomes
+// the value it denotes, and a string that is not JSON is a hard error naming
+// the problem — read's precedent, in pipe position.
+func (e *Evaluator) transformParse(n *ast.Transform, input object.Value) object.Value {
+	s, ok := asText(input)
+	if !ok {
+		return e.fail(n, "parse needs a string, got a %s", input.Type())
+	}
+	v, err := object.ParseJSON(strings.TrimSpace(s))
+	if err != nil {
+		return e.fail(n, "not valid JSON: %v", err)
+	}
+	return v
+}
+
+// transformLines splits a string into its lines (D-062): one trailing newline
+// dropped, interior empties kept. Elementwise on lists like the other string
+// transforms would be surprising here — a list of strings flattens instead,
+// because "the lines of several outputs" is one list of lines.
+func (e *Evaluator) transformLines(n *ast.Transform, input object.Value) object.Value {
+	split := func(s string) []object.Value {
+		trimmed := strings.TrimSuffix(s, "\n")
+		if trimmed == "" {
+			return nil
+		}
+		var out []object.Value
+		for _, line := range strings.Split(trimmed, "\n") {
+			out = append(out, object.String(line))
+		}
+		return out
+	}
+	switch x := input.(type) {
+	case object.String:
+		return &object.List{Elements: split(string(x))}
+	case object.Word:
+		return &object.List{Elements: split(string(x))}
+	case *object.List:
+		out := &object.List{}
+		for _, el := range x.Elements {
+			s, ok := asText(el)
+			if !ok {
+				return e.fail(n, "lines needs strings, found a %s", el.Type())
+			}
+			out.Elements = append(out.Elements, split(s)...)
+		}
+		return out
+	}
+	return e.fail(n, "lines needs a string, got a %s", input.Type())
 }

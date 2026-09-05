@@ -829,4 +829,5 @@ func (p *Parser) armStartsAt(n int) bool {
 var builtinTransforms = map[string]struct{}{
 	"filter": {}, "map": {}, "sort": {}, "group": {}, "take": {},
 	"count": {}, "sum": {}, "trim": {}, "lowercase": {}, "matches": {},
+	"parse": {}, "lines": {},
 }

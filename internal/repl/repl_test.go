@@ -436,6 +436,159 @@ func TestReadsAreWitnessed(t *testing.T) {
 	}
 }
 
+// --- D-060: bindings reach the shell as environment --------------------------
+
+func TestRunWithBindingsBecomeEnvironment(t *testing.T) {
+	h := host.NewFake()
+	// The Fake looks commands up verbatim, so the key IS the assertion: the
+	// runtime must build exactly this env-prefixed command.
+	h.Shells[`WHO='hermes' echo hello-$WHO`] = host.Shell{Stdout: "hello-hermes\n"}
+	code := RunWith("@who = \"hermes\"\n@out = run echo hello-$WHO\n       with { WHO: @who }\nsend @out to output", h, Options{})
+	if code != ExitOK {
+		t.Fatalf("exit %d\nstderr: %s", code, h.Stderr.String())
+	}
+	if !strings.Contains(h.Stdout.String(), "hello-hermes") {
+		t.Errorf("got %q", h.Stdout.String())
+	}
+}
+
+// A runtime value can hold quotes mana source cannot write. The Fake looks
+// commands up verbatim, so the key only matches if the single-quote escaping
+// is exactly right — the value stays one shell word, never shell syntax.
+func TestRunWithQuotesHostileValues(t *testing.T) {
+	h := host.NewFake()
+	h.Shells["cat trap"] = host.Shell{Stdout: "a'; rm -rf /'b\n"}
+	h.Shells[`V='a'\''; rm -rf /'\''b' echo done`] = host.Shell{Stdout: "done\n"}
+	code := RunWith("@v = run cat trap\n@out = run echo done\n       with { V: @v }\nsend @out to output", h, Options{})
+	if code != ExitOK {
+		t.Fatalf("exit %d\nstderr: %s", code, h.Stderr.String())
+	}
+	if !strings.Contains(h.Stdout.String(), "done") {
+		t.Errorf("got %q", h.Stdout.String())
+	}
+}
+
+// A hostile env NAME cannot be written in mana source (record keys are
+// idents), but a parsed JSON record can carry one — the runtime is the
+// gate, not the grammar.
+func TestRunWithRejectsBadEnvNames(t *testing.T) {
+	h := host.NewFake()
+	h.Shells["emit env"] = host.Shell{Stdout: `{"BAD-KEY": "x"}` + "\n"}
+	code := RunWith("@env = run emit env\n@rec = @env |> parse\n@out = run echo x\n       with @rec\nsend @out to output", h, Options{})
+	if code != ExitRuntime {
+		t.Fatalf("exit %d — a hyphenated env name must fail\nstderr: %s", code, h.Stderr.String())
+	}
+	if !strings.Contains(h.Stderr.String(), "environment name") {
+		t.Errorf("stderr: %s", h.Stderr.String())
+	}
+}
+
+// --- D-061/D-062: parse and lines --------------------------------------------
+
+func TestParseReentersTheValueWorld(t *testing.T) {
+	h := host.NewFake()
+	h.Shells["emit json"] = host.Shell{Stdout: `{"files": ["a.mana", "b.mana"]}` + "\n"}
+	code := RunWith("@raw = run emit json\n@v = @raw |> parse\n@n = @v.files |> count\nsend @n to output", h, Options{})
+	if code != ExitOK {
+		t.Fatalf("exit %d\nstderr: %s", code, h.Stderr.String())
+	}
+	if strings.TrimSpace(h.Stdout.String()) != "2" {
+		t.Errorf("got %q", h.Stdout.String())
+	}
+}
+
+func TestParseFailsHardOnProse(t *testing.T) {
+	h := host.NewFake()
+	code := RunWith("@v = \"not json at all\" |> parse\nsend @v to output", h, Options{})
+	if code != ExitRuntime {
+		t.Fatalf("exit %d", code)
+	}
+	if !strings.Contains(h.Stderr.String(), "not valid JSON") {
+		t.Errorf("stderr: %s", h.Stderr.String())
+	}
+}
+
+func TestLinesSplitsShellOutput(t *testing.T) {
+	h := host.NewFake()
+	h.Shells["ls examples"] = host.Shell{Stdout: "a.mana\nb.mana\nc.txt\n"}
+	code := RunWith("@files = run ls examples\n@mana = @files |> lines |> filter where (@ |> matches \".mana\")\n@n = @mana |> count\nsend @n to output", h, Options{})
+	if code != ExitOK {
+		t.Fatalf("exit %d\nstderr: %s", code, h.Stderr.String())
+	}
+	if strings.TrimSpace(h.Stdout.String()) != "2" {
+		t.Errorf("got %q", h.Stdout.String())
+	}
+}
+
+// --- D-063: a recovered step says so ------------------------------------------
+
+func TestRecoveredStepSaysSo(t *testing.T) {
+	h := host.NewFake()
+	h.Files["./cache.json"] = `{"cached": true}`
+	code := RunWith("-- live if possible, cache if not\n@a = read ./absent.json\n     or read ./cache.json\nsend @a to output", h, Options{JSON: true})
+	if code != ExitOK {
+		t.Fatalf("exit %d: %s", code, h.Stdout.String())
+	}
+	var doc struct {
+		Acts []struct {
+			Steps []struct {
+				Status string   `json:"status"`
+				Notes  []string `json:"notes"`
+			} `json:"steps"`
+		} `json:"acts"`
+	}
+	if err := json.Unmarshal([]byte(h.Stdout.String()), &doc); err != nil {
+		t.Fatal(err)
+	}
+	step := doc.Acts[0].Steps[0]
+	if step.Status != "recovered" {
+		t.Errorf("status %q, want recovered", step.Status)
+	}
+	if len(step.Notes) == 0 || !strings.Contains(step.Notes[0], "recovered by or") {
+		t.Errorf("notes: %v", step.Notes)
+	}
+}
+
+func TestAllOptionsFailingStaysFailed(t *testing.T) {
+	h := host.NewFake()
+	code := RunWith("-- everything is broken\n@a = read ./absent-1.json\n     or read ./absent-2.json\nsend @a to output", h, Options{JSON: true})
+	if code != ExitRuntime {
+		t.Fatalf("exit %d", code)
+	}
+	var doc struct {
+		Acts []struct {
+			Steps []struct {
+				Status string `json:"status"`
+			} `json:"steps"`
+		} `json:"acts"`
+	}
+	json.Unmarshal([]byte(h.Stdout.String()), &doc)
+	if doc.Acts[0].Steps[0].Status != "failed" {
+		t.Errorf("status %q, want failed — no option succeeded", doc.Acts[0].Steps[0].Status)
+	}
+}
+
+func TestCatchingAnEarlierStepsFailureStaysOk(t *testing.T) {
+	h := host.NewFake()
+	code := RunWith("-- bind a failure\n@bad = read ./absent.json\n\n-- handle it here\n@v = @bad or \"default\"\nsend @v to output", h, Options{JSON: true})
+	if code != ExitOK {
+		t.Fatalf("exit %d: %s", code, h.Stdout.String())
+	}
+	var doc struct {
+		Acts []struct {
+			Steps []struct {
+				Intent string `json:"intent"`
+				Status string `json:"status"`
+			} `json:"steps"`
+		} `json:"acts"`
+	}
+	json.Unmarshal([]byte(h.Stdout.String()), &doc)
+	steps := doc.Acts[0].Steps
+	if steps[0].Status != "failed" || steps[1].Status != "ok" {
+		t.Errorf("want failed then ok (recovery is about this step's own attempt): %+v", steps)
+	}
+}
+
 func TestTimeoutFlagReachesTheHost(t *testing.T) {
 	h := host.NewFake()
 	h.Shells["quick"] = host.Shell{Stdout: "ok"}
