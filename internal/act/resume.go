@@ -24,8 +24,17 @@ import (
 // unbroken chain of unchanged ancestors is what "still true" means (D-054,
 // extended across invocations by D-066).
 func identityOf(a *ast.Act) string {
-	sum := sha256.Sum256([]byte(a.String()))
-	return hex.EncodeToString(sum[:8])
+	h := sha256.New()
+	h.Write([]byte(a.String()))
+	// For from-imported acts, a.String() returns just `act "name" from ./path`
+	// — the resolved body is not included. Hash it separately so an edit to
+	// the imported file invalidates the identity. After resolveImports the
+	// body is always populated for both inline and imported acts.
+	if a.From != "" && a.Body != nil {
+		h.Write([]byte{0})
+		h.Write([]byte(a.Body.String()))
+	}
+	return hex.EncodeToString(h.Sum(nil)[:8])
 }
 
 // resumeEntry is one act's contribution to the integrity hash: the fields a

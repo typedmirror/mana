@@ -175,3 +175,39 @@ func TestResumeFinishesWithoutRefiring(t *testing.T) {
 		t.Fatalf("resumed report carries no seal")
 	}
 }
+
+// An imported act's identity must include the resolved body, not just the
+// `from` path. Editing the imported file must invalidate the cached result.
+func TestResumeInvalidatesEditedImport(t *testing.T) {
+	const src = `act "work" from ./worker.mana
+
+act "report" depends on "work" {
+  send act.work.result
+}
+`
+	// First run: work succeeds (imported body runs "work" shell command).
+	f := host.NewFake()
+	f.Files["./worker.mana"] = "-- original\n@r = run work\nsend @r"
+	f.Shells["work"] = host.Shell{Stdout: "v1\n"}
+	r, _ := runWithOpts(t, f, src, Options{})
+	if !r.OK() {
+		t.Fatalf("first run failed: %+v", r)
+	}
+	blob, _ := JSON(r, "")
+	prior, _, err := PriorFromReport(blob)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+
+	// Edit the imported file — the body changes but the path stays the same.
+	f2 := host.NewFake()
+	f2.Files["./worker.mana"] = "-- updated\n@r = run work-v2\nsend @r"
+	f2.Shells["work-v2"] = host.Shell{Stdout: "v2\n"}
+	r2, _ := runWithOpts(t, f2, src, Options{Prior: prior})
+	if !r2.OK() {
+		t.Fatalf("resumed run failed: %+v", r2)
+	}
+	if got := outcome(t, r2, "work").Status; got == Reused {
+		t.Fatalf("imported act was wrongly reused after its file was edited")
+	}
+}
