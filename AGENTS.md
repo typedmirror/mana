@@ -103,6 +103,11 @@ succeeded deps keep results, module effects re-fire — there is no
 idempotence protection). `--timeout D` bounds each shell command and each
 module/kernel call. `--dry-run` is the plan for humans; `--emit-envelope`
 is the per-act capability family for machines; both cause nothing.
+`--resume prior.json` finishes an interrupted job from its own `--json`
+report: acts that succeeded there with unchanged text and unchanged
+ancestors come back `reused` (effects NOT re-fired); everything else runs.
+The flag is the assertion that the world held — no flag, no reuse. A
+tampered or unsealed report is refused, not obeyed (D-066).
 
 Serve: session-scoped = flat-script bindings and the last act-job's results
 (identity-based reuse; effects not re-fired; `?fresh=1` bypasses).

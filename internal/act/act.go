@@ -71,8 +71,12 @@ const (
 // allowed to touch, and the reasoning it was carrying. Together these are a
 // complete trace with no instrumentation added (v2 §14.5).
 type Outcome struct {
-	Name      string
-	Status    Status
+	Name   string
+	Status Status
+	// Identity is the hash of the act text that produced this outcome
+	// (D-066). It rides into the report so a later --resume can prove the
+	// act is unchanged before trusting the cached result.
+	Identity  string
 	Result    object.Value
 	HasResult bool
 	Err       *object.Err
@@ -91,6 +95,9 @@ type Report struct {
 	Outcomes []Outcome // in completion-wave order, then alphabetical within a wave
 	Err      *object.Err
 	Elapsed  time.Duration
+	// ResumedFrom names the report this run resumed from (path@seal), so a
+	// chain of reports is an auditable lineage (D-066).
+	ResumedFrom string
 }
 
 // Options tune a run.
@@ -138,7 +145,7 @@ func Remember(prog *ast.Program, r *Report) *Prior {
 		if !ok {
 			continue
 		}
-		p.acts[o.Name] = priorAct{identity: a.String(), result: o.Result, hasResult: o.HasResult}
+		p.acts[o.Name] = priorAct{identity: identityOf(a), result: o.Result, hasResult: o.HasResult}
 	}
 	return p
 }
@@ -158,7 +165,7 @@ func (p *Prior) reusable(acts []*ast.Act) map[string]bool {
 				continue
 			}
 			prior, has := p.acts[a.Name]
-			if !has || prior.identity != a.String() {
+			if !has || prior.identity != identityOf(a) {
 				continue
 			}
 			deps := true
@@ -309,7 +316,7 @@ func runGraph(acts []*ast.Act, h host.Host, opts Options) *Report {
 				// Unchanged since it last succeeded, with unchanged ancestors:
 				// restore the result, fire nothing (D-054).
 				prior := opts.Prior.acts[a.Name]
-				outcomes[i] = Outcome{Name: a.Name, Status: Reused, Result: prior.result, HasResult: prior.hasResult, Depends: a.Depends}
+				outcomes[i] = Outcome{Name: a.Name, Status: Reused, Identity: identityOf(a), Result: prior.result, HasResult: prior.hasResult, Depends: a.Depends}
 				if prior.hasResult {
 					table.set(a.Name, prior.result)
 				}
@@ -362,6 +369,7 @@ func runOne(a *ast.Act, h host.Host, table *Table, opts Options, jobStart time.T
 	out.Started = started
 	out.Duration = time.Since(jobStart) - started
 	out.Depends = a.Depends
+	out.Identity = identityOf(a)
 	return out
 }
 

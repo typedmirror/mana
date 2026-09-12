@@ -14,9 +14,13 @@ import (
 // callers receive.
 func JSON(r *Report, output string) ([]byte, error) {
 	out := jobJSON{
-		OK:        r.OK(),
-		Output:    output,
-		ElapsedMs: r.Elapsed.Milliseconds(),
+		OK:          r.OK(),
+		Output:      output,
+		ResumedFrom: r.ResumedFrom,
+		ElapsedMs:   r.Elapsed.Milliseconds(),
+	}
+	if entries := resumeEntries(r.Outcomes); len(entries) > 0 {
+		out.Integrity = integrityOf(entries)
 	}
 	if r.Err != nil {
 		out.Error = errJSON("", r.Err)
@@ -43,10 +47,17 @@ type jobJSON struct {
 	Failures []failJSON `json:"failures,omitempty"`
 	// Skipped names the acts that never ran. Absence from here plus a `halted`
 	// step is how a reader knows what the job did not do.
-	Skipped   []string    `json:"skipped,omitempty"`
-	Error     *failJSON   `json:"error,omitempty"` // a job that could not start at all
-	Acts      []actRecord `json:"acts"`
-	ElapsedMs int64       `json:"elapsed_ms"`
+	Skipped []string    `json:"skipped,omitempty"`
+	Error   *failJSON   `json:"error,omitempty"` // a job that could not start at all
+	Acts    []actRecord `json:"acts"`
+	// ResumedFrom names the report this run resumed from (path@seal) — a
+	// chain of reports is an auditable job lineage (D-066).
+	ResumedFrom string `json:"resumed_from,omitempty"`
+	// Integrity seals the resumable subset (act names, identities, results).
+	// --resume verifies it before trusting anything; an edited report is
+	// refused, not quietly obeyed.
+	Integrity string `json:"integrity,omitempty"`
+	ElapsedMs int64  `json:"elapsed_ms"`
 }
 
 type actRecord struct {
@@ -54,8 +65,14 @@ type actRecord struct {
 	// Status is "ok", "failed", or "skipped". Skipped is deliberately not a
 	// success: the act never ran. The failure itself lives in the job's
 	// `failures` list, once.
-	Status     string       `json:"status"`
-	Result     any          `json:"result,omitempty"`
+	Status string `json:"status"`
+	// Identity hashes the act text that produced this outcome; --resume
+	// re-hashes the current text and reuses only on a match (D-066).
+	Identity string `json:"identity,omitempty"`
+	Result   any    `json:"result,omitempty"`
+	// HasResult distinguishes "sent nothing" from "sent null" — a resume
+	// must restore exactly what was established, including its absence.
+	HasResult  bool         `json:"has_result,omitempty"`
 	Reason     string       `json:"reason,omitempty"` // why it was skipped
 	Steps      []stepRecord `json:"steps,omitempty"`
 	Uses       []string     `json:"uses,omitempty"`
@@ -97,6 +114,8 @@ func actJSON(o Outcome) actRecord {
 	rec := actRecord{
 		Name:       o.Name,
 		Status:     string(o.Status),
+		Identity:   o.Identity,
+		HasResult:  o.HasResult,
 		Reason:     o.Reason,
 		Uses:       o.Uses,
 		Depends:    o.Depends,

@@ -10,6 +10,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/typedmirror/mana/internal/act"
 	"github.com/typedmirror/mana/internal/host"
 	"github.com/typedmirror/mana/internal/repl"
 	"github.com/typedmirror/mana/internal/serve"
@@ -37,6 +38,10 @@ flags:
   --json                 emit the run report as JSON, for a machine reader
   --trace                print the execution record afterwards, on stderr
   --retry N              give a failed act N extra attempts
+  --resume R.json        finish a prior run: acts that succeeded there, with
+                         unchanged text and unchanged ancestors, are reused
+                         and their effects are not fired again (the flag is
+                         the assertion that the world has held)
   --timeout D            bound each shell command and module call (default 2m)
   --addr A               serve address (default 127.0.0.1:7777)
   --tokens               print the token stream, intent channel included
@@ -78,6 +83,7 @@ func run(args []string) int {
 	timeout := fs_.Duration("timeout", 0, "bound on each shell command (default 2m)")
 	addr := fs_.String("addr", "127.0.0.1:7777", "address for `mana serve`")
 	emitEnvelope := fs_.Bool("emit-envelope", false, "print the per-act capability envelope family, causing nothing")
+	resume := fs_.String("resume", "", "finish a prior run from its --json report")
 	if err := fs_.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			fmt.Fprint(os.Stdout, usage)
@@ -115,8 +121,15 @@ func run(args []string) int {
 	if len(rest) > 0 && rest[0] == "serve" {
 		// The flag package stops at the first positional, so `mana serve
 		// --addr X` would silently drop the flag. Parse what followed the
-		// subcommand too; both orders work.
+		// subcommand too; both orders work. --resume is checked AFTER this
+		// re-parse, because `mana serve --resume r` lands the flag here, not
+		// in the first pass.
 		if err := fs_.Parse(rest[1:]); err != nil {
+			return repl.ExitParse
+		}
+		if *resume != "" {
+			// P8: a flag that cannot apply is an error, not a silence.
+			fmt.Fprintln(os.Stderr, "mana: --resume applies to running a script, not to serve")
 			return repl.ExitParse
 		}
 		return runServe(*addr, serve.Options{
@@ -150,19 +163,42 @@ func run(args []string) int {
 		return repl.ExitOK
 	}
 	if *emitEnvelope {
+		if *resume != "" {
+			fmt.Fprintln(os.Stderr, "mana: --resume does not combine with --emit-envelope")
+			return repl.ExitParse
+		}
 		return repl.EmitEnvelope(string(src), h)
 	}
 	if *retries < 0 {
 		fmt.Fprintln(os.Stderr, "mana: --retry cannot be negative")
 		return repl.ExitParse
 	}
-	return repl.RunWith(string(src), h, repl.Options{
+	opts := repl.Options{
 		Retries: *retries,
 		Trace:   *trace,
 		DryRun:  *dryRun,
 		JSON:    *asJSON,
 		Timeout: *timeout,
-	})
+	}
+	if *resume != "" {
+		if *dryRun {
+			fmt.Fprintln(os.Stderr, "mana: --resume does not combine with --dry-run yet")
+			return repl.ExitParse
+		}
+		blob, err := os.ReadFile(*resume)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "mana: --resume: %v\n", err)
+			return repl.ExitParse
+		}
+		prior, seal, err := act.PriorFromReport(blob)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "mana: --resume %s: %v\n", *resume, err)
+			return repl.ExitParse
+		}
+		opts.Prior = prior
+		opts.ResumedFrom = *resume + "@" + seal
+	}
+	return repl.RunWith(string(src), h, opts)
 }
 
 // runServe starts the session server. Each session's host mirrors the

@@ -46,6 +46,11 @@ type Options struct {
 	DryRun  bool          // report what would happen, cause nothing
 	JSON    bool          // emit the report as JSON instead of running normally
 	Timeout time.Duration // bound on each shell command; zero uses the default
+	// Prior enables cross-invocation reuse from a prior report (D-066);
+	// ResumedFrom names that report for the lineage field. Nil/empty means
+	// every act runs.
+	Prior       *act.Prior
+	ResumedFrom string
 }
 
 // Run executes a whole script and returns the process exit code. Diagnostics go
@@ -84,7 +89,8 @@ func RunWith(src string, h host.Host, opts Options) int {
 		runHost = captured
 	}
 
-	report := act.RunWith(prog, runHost, act.Options{Retries: opts.Retries, Timeout: opts.Timeout})
+	report := act.RunWith(prog, runHost, act.Options{Retries: opts.Retries, Timeout: opts.Timeout, Prior: opts.Prior})
+	report.ResumedFrom = opts.ResumedFrom
 
 	if opts.JSON {
 		blob, err := act.JSON(report, captured.Text())
